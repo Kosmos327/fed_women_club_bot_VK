@@ -29,3 +29,7 @@ def is_legacy_discount_command(text: str | None) -> bool:
 
 def is_legacy_confirm_command(text: str | None) -> bool:
     return bool(text and re.fullmatch(r"да\s+\d+", text.strip(), flags=re.IGNORECASE))
+
+
+def parse_verify_partner_command(text: str | None) -> int | None:
+    return _parse_id(r"verify_partner_(\d+)", text)

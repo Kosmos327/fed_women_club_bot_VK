@@ -1,12 +1,39 @@
 import json
 from typing import Iterable
 
-BUTTON_PARTNERS = "Партнёры и скидки"
-BUTTON_MY_CODES = "Мои коды"
-BUTTON_SUBSCRIPTION = "Подписка"
-BUTTON_PAY = "Оплатить / Продлить"
+BUTTON_SUBSCRIPTION = "💗 Подписка"
+BUTTON_PARTNERS = "✨ Партнёры и скидки"
+BUTTON_MY_CODES = "🎁 Мои привилегии"
+BUTTON_PAY = "💳 Оплатить / Продлить"
+BUTTON_CITY = "🌸 Выбрать город"
 BUTTON_HELP = "❓ Помощь"
-BUTTON_MAIN_MENU = "Главное меню"
+BUTTON_MAIN_MENU = "🏠 Главное меню"
+
+CITIES = [
+    "Новосибирск",
+    "Москва",
+    "Санкт-Петербург",
+    "Екатеринбург",
+    "Казань",
+]
+
+WOMEN_CATEGORIES = [
+    "Красота",
+    "Маникюр / педикюр",
+    "Волосы / окрашивание",
+    "Брови / ресницы",
+    "Косметология",
+    "Массаж / SPA",
+    "Фитнес / йога",
+    "Здоровье",
+    "Психология",
+    "Одежда / аксессуары",
+    "Кафе / рестораны",
+    "Обучение / мастер-классы",
+    "Фотосессии",
+    "Цветы / подарки",
+    "Другое",
+]
 
 
 def _button(label: str, action: str, color: str = "secondary", **payload) -> dict:
@@ -30,9 +57,10 @@ def _keyboard(rows: Iterable[Iterable[dict]], one_time: bool = False) -> str:
 def get_main_keyboard() -> str:
     return _keyboard(
         [
+            [_button(BUTTON_SUBSCRIPTION, "subscription", "primary")],
             [_button(BUTTON_PARTNERS, "partners", "primary")],
-            [_button(BUTTON_MY_CODES, "my_codes"), _button(BUTTON_SUBSCRIPTION, "subscription")],
-            [_button(BUTTON_HELP, "help")],
+            [_button(BUTTON_MY_CODES, "my_codes"), _button(BUTTON_PAY, "pay", "positive")],
+            [_button(BUTTON_CITY, "city_select"), _button(BUTTON_HELP, "help")],
         ]
     )
 
@@ -41,10 +69,26 @@ def get_nav_keyboard() -> str:
     return _keyboard([[_button(BUTTON_MAIN_MENU, "main_menu", "primary")]])
 
 
-def get_categories_keyboard(categories: list[str]) -> str:
+def get_city_keyboard() -> str:
+    rows = [[_button(city, "city_selected", "primary", city=city)] for city in CITIES]
+    rows.append([_button(BUTTON_MAIN_MENU, "main_menu")])
+    return _keyboard(rows)
+
+
+def get_city_selected_keyboard() -> str:
+    return _keyboard(
+        [
+            [_button(BUTTON_PARTNERS, "partners", "primary")],
+            [_button(BUTTON_MAIN_MENU, "main_menu")],
+        ]
+    )
+
+
+def get_categories_keyboard(categories: list[str] | None = None) -> str:
+    category_names = categories or WOMEN_CATEGORIES
     rows = [[_button("Все категории", "category_selected", "primary", category="all")]]
-    rows.extend([[_button(name, "category_selected", category=name)] for name in categories])
-    rows.append([_button("Найти услугу", "service_search_start", "primary")])
+    rows.extend([[_button(name, "category_selected", category=name)] for name in category_names])
+    rows.append([_button("Найти предложение", "service_search_start", "primary")])
     rows.append([_button(BUTTON_MAIN_MENU, "main_menu")])
     return _keyboard(rows)
 
@@ -59,7 +103,7 @@ def get_partners_keyboard(partners: list[dict], category: str | None = None) -> 
 
 
 def get_partner_actions_keyboard(partner_id: int, has_contacts: bool = False) -> str:
-    rows = [[_button("Услуги", "partner_services", "primary", partner_id=partner_id)]]
+    rows = [[_button("Услуги и предложения", "partner_services", "primary", partner_id=partner_id)]]
     if has_contacts:
         rows.append([_button("Контакты", "partner_contacts", partner_id=partner_id)])
     rows.append([_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")])
@@ -68,7 +112,7 @@ def get_partner_actions_keyboard(partner_id: int, has_contacts: bool = False) ->
 
 def get_services_keyboard(partner_id: int, services: list[dict]) -> str:
     rows = [
-        [_button(str(service.get("title") or f"Услуга {service.get('id')}"), "service_selected", service_id=service.get("id"), partner_id=partner_id)]
+        [_button(str(service.get("title") or f"Предложение {service.get('id')}"), "service_selected", service_id=service.get("id"), partner_id=partner_id)]
         for service in services
     ]
     rows.append([_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")])
@@ -78,7 +122,7 @@ def get_services_keyboard(partner_id: int, services: list[dict]) -> str:
 def get_service_actions_keyboard(partner_id: int, service_id: int) -> str:
     return _keyboard(
         [
-            [_button("Получить код", "get_discount_code", "positive", partner_id=partner_id, service_id=service_id)],
+            [_button("Получить привилегию", "get_discount_code", "positive", partner_id=partner_id, service_id=service_id)],
             [_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")],
         ]
     )
@@ -119,7 +163,7 @@ def get_admin_keyboard() -> str:
 
 def get_service_search_results_keyboard(results: list[dict]) -> str:
     rows = [
-        [_button(str(item.get("service_title") or f"Услуга {item.get('service_id')}"), "service_selected", partner_id=item.get("partner_id"), service_id=item.get("service_id"))]
+        [_button(str(item.get("service_title") or f"Предложение {item.get('service_id')}"), "service_selected", partner_id=item.get("partner_id"), service_id=item.get("service_id"))]
         for item in results
     ]
     rows.append([_button("Новый поиск", "service_search_start"), _button(BUTTON_MAIN_MENU, "main_menu")])
