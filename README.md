@@ -1,30 +1,48 @@
 # Federal Women Club VK Bot
 
-MVP VK bot skeleton for subscription club client interface.
+VK-бот для продукта **«Женский клуб»** — федерального клуба привилегий для женщин.
 
-Проект находится на этапе переноса skeleton из `Kosmos327/vk_bot` в отдельный репозиторий VK-бота. В этом PR не выполняется глубокий ребрендинг, не переписываются сценарии и не меняются API-контракты: skeleton оставлен как MVP-клиентский интерфейс для subscription club.
+Бот является клиентским VK-интерфейсом к WEB/CRM из репозитория `Kosmos327/fed_women_club_WEB`: помогает участнице выбрать город, посмотреть партнёров и скидки, получить/подтвердить привилегию через QR и оформить или продлить подписку.
+
+## Позиционирование
+
+**Женский клуб** — федеральный клуб привилегий для женщин: скидки, подарки, розыгрыши и специальные предложения у партнёров в разных городах.
+
+Тональность пользовательских текстов: мягкая, премиальная и дружелюбная.
+
+## Основные сценарии MVP
+
+- **Выбрать город** — участница нажимает `🌸 Выбрать город` и выбирает один из городов MVP: Новосибирск, Москва, Санкт-Петербург, Екатеринбург, Казань.
+- **Посмотреть партнёров** — раздел `✨ Партнёры и скидки` показывает женские категории и партнёрские предложения.
+- **Подтвердить привилегию через QR** — текущий flow `verify_partner_<id>` сохраняется; бот показывает код подтверждения, срок действия 5 минут и просит показать экран сотруднику партнёра.
+- **Оплатить/продлить подписку** — раздел `💳 Оплатить / Продлить` создаёт заявку на оплату через существующий backend gateway.
+- **Посмотреть свои привилегии** — раздел `🎁 Мои привилегии` использует существующий API-совместимый flow кодов.
+
+## City selection MVP
+
+Выбранный город хранится в текущем in-memory state бота (`USER_STATE`) как `selected_city`.
+
+Постоянный endpoint синхронизации выбранного города в backend gateway пока не добавляется, чтобы не менять API-контракты без необходимости. Когда WEB/CRM предоставит endpoint `selected_city`, значение можно будет синхронизировать через `services/backend_gateway.py`.
 
 ## Структура проекта
 
 ```text
 .
-├── main.py                    # точка входа VK Long Poll bot
+├── main.py                    # точка входа VK Long Poll bot и сценарии MVP
 ├── config.py                  # загрузка env-конфигурации без хардкода секретов
-├── keyboards.py               # VK-клавиатуры MVP-сценариев
-├── texts.py                   # базовые тексты бота
+├── keyboards.py               # VK-клавиатуры, города и женские категории
+├── texts.py                   # брендовые пользовательские тексты
 ├── routing.py                 # парсинг текстовых команд
 ├── state.py                   # in-memory пользовательское состояние MVP
 ├── diagnostics.py             # debug/health helpers
 ├── vk_attachments.py          # извлечение URL из VK-вложений
 ├── services/
 │   └── backend_gateway.py     # HTTP gateway к WEB/CRM API
-├── tests/                     # pytest-проверки skeleton
+├── tests/                     # pytest-проверки VK bot MVP
 ├── requirements.txt           # Python-зависимости
 ├── .env.example               # безопасные env placeholders
 └── .gitignore                 # исключения secrets/cache/runtime
 ```
-
-WEB/CRM находится в отдельном репозитории: `Kosmos327/fed_women_club_WEB`.
 
 ## Env placeholders
 
@@ -43,8 +61,9 @@ CLUB_INVITE_LINK=https://women-club.example/invite
 Важно:
 
 - `VK_GROUP_TOKEN` и `BOT_API_TOKEN` не хардкодятся в коде.
-- `BACKEND_BASE_URL` в skeleton использует placeholder `https://women-club.example/api/v1`.
-- Production env, runtime-файлы и логи не переносятся.
+- `BACKEND_BASE_URL` использует безопасный placeholder `https://women-club.example/api/v1`.
+- Production env, runtime-файлы и логи не переносятся в репозиторий.
+- WEB repo в рамках изменений VK-бота не деплоится и не изменяется.
 
 ## Локальная проверка
 
@@ -55,8 +74,7 @@ pip install -r requirements.txt
 PYTHONPATH=. pytest -q
 python -m py_compile main.py keyboards.py config.py
 python -m compileall .
-git check-ignore .env .venv/ __pycache__/ .pytest_cache/
-rg -n "<forbidden legacy brand/domain patterns>" -S -uu --glob '!**/.git/**'
+rg -n "<legacy brand patterns>" -S -uu --glob '!**/.git/**'
 ```
 
 ## Запуск
@@ -65,4 +83,4 @@ rg -n "<forbidden legacy brand/domain patterns>" -S -uu --glob '!**/.git/**'
 python main.py
 ```
 
-Для запуска нужен безопасно настроенный локальный `.env` с VK credentials и тестовым/production backend endpoint. Secrets в репозиторий не добавляются.
+Для запуска нужен безопасно настроенный локальный `.env` с VK credentials и backend endpoint. Secrets в репозиторий не добавляются.

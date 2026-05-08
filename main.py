@@ -14,15 +14,19 @@ from vk_api.exceptions import ApiError
 from config import load_config
 from diagnostics import format_debug_status, format_health_status
 from keyboards import (
+    BUTTON_CITY,
     BUTTON_HELP,
     BUTTON_MAIN_MENU,
     BUTTON_MY_CODES,
     BUTTON_PARTNERS,
     BUTTON_PAY,
     BUTTON_SUBSCRIPTION,
+    WOMEN_CATEGORIES,
     get_admin_keyboard,
     get_backend_unavailable_keyboard,
     get_categories_keyboard,
+    get_city_keyboard,
+    get_city_selected_keyboard,
     get_codes_filter_keyboard,
     get_main_keyboard,
     get_nav_keyboard,
@@ -36,10 +40,33 @@ from keyboards import (
     get_verify_error_keyboard,
     get_verify_success_keyboard,
 )
-from routing import parse_code_command, parse_partner_command, parse_service_command
+from routing import parse_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
 from services.backend_gateway import BackendApiError, BackendGateway
-from state import USER_STATE, get_user_state, reset_user_state
-from texts import HELP_TEXT, WELCOME_TEXT
+from state import USER_STATE, clear_user_flow_state, get_user_state
+from texts import (
+    BACKEND_UNAVAILABLE_TEXT,
+    FALLBACK_TEXT,
+    HELP_TEXT,
+    MAIN_MENU_TEXT,
+    MY_PRIVILEGES_EMPTY_TEXT,
+    MY_PRIVILEGES_FILTER_TEXT,
+    NO_SUBSCRIPTION_TEXT,
+    PARTNERS_FOUND_TEXT,
+    PARTNERS_INTRO_TEXT,
+    PAYMENT_RECEIPT_RECEIVED_TEXT,
+    PAYMENT_RECEIPT_REQUEST_TEXT,
+    PAYMENT_REQUEST_NOT_FOUND_TEXT,
+    PRIVILEGE_LIMIT_REACHED_TEXT,
+    SERVICE_SEARCH_EMPTY_TEXT,
+    SERVICE_SEARCH_PROMPT_TEXT,
+    SERVICE_SEARCH_RESULTS_TEXT,
+    SERVICES_INTRO_TEXT,
+    SUBSCRIPTION_ACTIVE_TEXT,
+    SUBSCRIPTION_INACTIVE_TEXT,
+    VERIFY_PARTNER_NOT_FOUND_TEXT,
+    VERIFY_PRIVILEGE_FAILED_TEXT,
+    WELCOME_TEXT,
+)
 from vk_attachments import extract_attachment_url
 
 logger = logging.getLogger("vk_bot")
@@ -159,16 +186,20 @@ def format_service_card(service: dict, partner_name: Optional[str] = None, partn
 
 def format_code_item(code_data: dict) -> str:
     lines = [
-        f"Код: {code_data.get('code') or '—'}",
+        f"Привилегия: {code_data.get('code') or '—'}",
         f"Партнёр: {code_data.get('partner_name') or '—'}",
         f"Статус: {code_data.get('status') or '—'}",
-        f"Выдан: {format_user_date(code_data.get('created_at'))}",
+        f"Выдана: {format_user_date(code_data.get('created_at'))}",
         f"Действует до: {format_user_date(code_data.get('expires_at'))}",
     ]
     service_name = code_data.get("service_title") or code_data.get("service_name")
     if _is_filled(service_name):
-        lines.insert(2, f"Услуга: {service_name}")
+        lines.insert(2, f"Предложение: {service_name}")
     return "\n".join(lines)
+
+
+def format_city_selected_message(city: str) -> str:
+    return f"Город выбран: {city}. Теперь покажем партнёров и предложения рядом."
 
 
 def format_payment_request_message(payment: dict) -> str:
@@ -183,19 +214,19 @@ def format_payment_request_message(payment: dict) -> str:
 
 def format_backend_error_message(exc: BackendApiError) -> str:
     if exc.code == "no_subscription":
-        return "Для получения кодов нужна активная подписка. Откройте раздел «Подписка»."
+        return NO_SUBSCRIPTION_TEXT
     if exc.code == "payment_request_not_found":
-        return "Сначала нажмите «Оплатить / Продлить», чтобы создать заявку на оплату."
+        return PAYMENT_REQUEST_NOT_FOUND_TEXT
     if exc.code == "discount_code_limit_reached":
-        return "Вы уже получали код у этого партнёра в этом месяце. Посмотрите раздел «Мои коды»."
-    return "Сервис временно недоступен. Попробуйте позже."
+        return PRIVILEGE_LIMIT_REACHED_TEXT
+    return BACKEND_UNAVAILABLE_TEXT
 
 
 def handle_payment_paid(gateway: BackendGateway, vk_user_id: int) -> str:
     state = get_user_state(vk_user_id)
     gateway.mark_payment_paid(vk_user_id, payment_request_id=state.get("last_payment_request_id"))
     state["awaiting_payment_receipt"] = True
-    return "Спасибо! Теперь отправьте скрин оплаты сюда в чат. Администратор проверит оплату."
+    return PAYMENT_RECEIPT_REQUEST_TEXT
 
 
 def handle_verify_partner(gateway: BackendGateway, vk_user_id: int | str, partner_id: int) -> tuple[str, str]:
@@ -203,19 +234,22 @@ def handle_verify_partner(gateway: BackendGateway, vk_user_id: int | str, partne
         response = gateway.verify_partner(vk_user_id, partner_id)
     except BackendApiError as exc:
         if exc.code == "no_subscription":
-            return "Подписка не активна. Оформите или продлите подписку.", get_no_subscription_keyboard()
+            return NO_SUBSCRIPTION_TEXT, get_no_subscription_keyboard()
         if exc.code == "backend_unavailable":
-            return "Сервис временно недоступен. Попробуйте позже.", get_backend_unavailable_keyboard()
-        return "Не удалось найти партнёра по этому QR.", get_verify_error_keyboard()
+            return BACKEND_UNAVAILABLE_TEXT, get_backend_unavailable_keyboard()
+        return VERIFY_PARTNER_NOT_FOUND_TEXT, get_verify_error_keyboard()
     if response.get("ok") is True:
+        expires_at = response.get("expires_at") or response.get("expires") or "—"
         return (
-            "✅ СКИДКА СОГЛАСОВАНА\n\n"
+            "✅ Привилегия подтверждена\n\n"
             f"Партнёр: {response.get('partner_name') or '—'}\n"
             f"Код подтверждения: {response.get('dynamic_code') or '—'}\n"
-            "Покажите этот экран партнёру.",
+            "Действует 5 минут\n"
+            f"Действует до: {expires_at}\n\n"
+            "Покажите этот экран сотруднику партнёра.",
             get_verify_success_keyboard(),
         )
-    return "Не удалось подтвердить скидку.", get_verify_error_keyboard()
+    return VERIFY_PRIVILEGE_FAILED_TEXT, get_verify_error_keyboard()
 
 
 def main() -> None:
@@ -250,7 +284,12 @@ def main() -> None:
                         send_message(vk_api, peer_id, format_health_status(config, gateway), get_admin_keyboard())
                         continue
                     if not gateway:
-                        send_message(vk_api, peer_id, "Бот работает в режиме skeleton. Backend mode отключён.")
+                        send_message(vk_api, peer_id, "Бот работает в локальном MVP-режиме. Подключение к WEB/CRM сейчас отключено.")
+                        continue
+                    verify_partner_id = parse_verify_partner_command(raw_text)
+                    if verify_partner_id:
+                        message_text, keyboard = handle_verify_partner(gateway, from_id, verify_partner_id)
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if text in {"/start", "start", "начать"}:
                         profile = vk_api.users.get(user_ids=from_id)[0]
@@ -258,19 +297,27 @@ def main() -> None:
                         send_message(vk_api, peer_id, WELCOME_TEXT, get_main_keyboard())
                         continue
                     if action == "main_menu" or text in {normalize_text(BUTTON_MAIN_MENU), "меню"}:
-                        reset_user_state(from_id)
-                        send_message(vk_api, peer_id, "Главное меню", get_main_keyboard())
+                        clear_user_flow_state(from_id)
+                        send_message(vk_api, peer_id, MAIN_MENU_TEXT, get_main_keyboard())
                         continue
                     state = get_user_state(from_id)
+                    if action == "city_select" or text == normalize_text(BUTTON_CITY):
+                        send_message(vk_api, peer_id, "Выберите город", get_city_keyboard())
+                        continue
+                    if action == "city_selected" and payload.get("city"):
+                        city = str(payload.get("city"))
+                        # TODO: when WEB/CRM exposes selected_city endpoint, sync this value via BackendGateway.
+                        state["selected_city"] = city
+                        send_message(vk_api, peer_id, format_city_selected_message(city), get_city_selected_keyboard())
+                        continue
                     if action == "partners" or text == normalize_text(BUTTON_PARTNERS):
-                        categories = gateway.get_categories()
-                        names = [c.get("name", "") for c in categories if c.get("name")]
+                        names = WOMEN_CATEGORIES
                         state["categories"] = names
-                        send_message(vk_api, peer_id, "Что хотите найти?", get_categories_keyboard(names))
+                        send_message(vk_api, peer_id, PARTNERS_INTRO_TEXT, get_categories_keyboard(names))
                         continue
                     if action == "service_search_start":
                         state["awaiting_service_search_query"] = True
-                        send_message(vk_api, peer_id, "Напишите, какую услугу ищете.")
+                        send_message(vk_api, peer_id, SERVICE_SEARCH_PROMPT_TEXT)
                         continue
                     if state.get("awaiting_service_search_query") and raw_text:
                         state["awaiting_service_search_query"] = False
@@ -283,13 +330,13 @@ def main() -> None:
                             }
                             for item in found[:10]
                         ]
-                        send_message(vk_api, peer_id, "Результаты поиска:" if mapped else "Ничего не найдено.", get_service_search_results_keyboard(mapped))
+                        send_message(vk_api, peer_id, SERVICE_SEARCH_RESULTS_TEXT if mapped else SERVICE_SEARCH_EMPTY_TEXT, get_service_search_results_keyboard(mapped))
                         continue
                     if action == "category_selected":
                         category = payload.get("category")
                         partners = gateway.get_partners(category=None if category == "all" else category)
                         state["last_partners"] = partners
-                        send_message(vk_api, peer_id, "Найденные партнёры:", get_partners_keyboard(partners, category))
+                        send_message(vk_api, peer_id, PARTNERS_FOUND_TEXT, get_partners_keyboard(partners, category))
                         continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)
                     if partner_id:
@@ -303,7 +350,7 @@ def main() -> None:
                         services = gateway.get_partner_services(partner_id)
                         state["last_partner_id"] = partner_id
                         state["last_services"] = services
-                        send_message(vk_api, peer_id, "Выберите услугу:", get_services_keyboard(partner_id, services))
+                        send_message(vk_api, peer_id, SERVICES_INTRO_TEXT, get_services_keyboard(partner_id, services))
                         continue
                     service_id = payload.get("service_id") if action == "service_selected" else parse_service_command(raw_text)
                     if service_id:
@@ -321,19 +368,19 @@ def main() -> None:
                         send_message(vk_api, peer_id, format_code_item(code_data))
                         continue
                     if action == "my_codes" or text == normalize_text(BUTTON_MY_CODES):
-                        send_message(vk_api, peer_id, "Выберите фильтр кодов:", get_codes_filter_keyboard())
+                        send_message(vk_api, peer_id, MY_PRIVILEGES_FILTER_TEXT, get_codes_filter_keyboard())
                         continue
                     if action == "codes_filter":
                         status = payload.get("status")
                         codes = gateway.get_my_codes(from_id, status=None if status == "all" else status)
-                        send_message(vk_api, peer_id, "\n\n".join(format_code_item(c) for c in codes) if codes else "У вас пока нет кодов.", get_codes_filter_keyboard())
+                        send_message(vk_api, peer_id, "\n\n".join(format_code_item(c) for c in codes) if codes else MY_PRIVILEGES_EMPTY_TEXT, get_codes_filter_keyboard())
                         continue
                     if action == "subscription" or text == normalize_text(BUTTON_SUBSCRIPTION):
                         subscription = gateway.get_subscription(from_id)
                         if subscription.get("has_active_subscription"):
-                            message_text = f"Подписка активна до: {format_user_date(subscription.get('ends_at'))}"
+                            message_text = SUBSCRIPTION_ACTIVE_TEXT.format(ends_at=format_user_date(subscription.get("ends_at")))
                         else:
-                            message_text = "Подписка не активна."
+                            message_text = SUBSCRIPTION_INACTIVE_TEXT
                         send_message(vk_api, peer_id, message_text, get_main_keyboard())
                         continue
                     if action == "pay" or text in {"оплатить подписку", normalize_text(BUTTON_PAY)}:
@@ -347,18 +394,18 @@ def main() -> None:
                     file_url = extract_attachment_url(message)
                     if file_url:
                         gateway.attach_payment_receipt(from_id, file_url)
-                        send_message(vk_api, peer_id, "Скрин оплаты получен. Администратор проверит оплату.")
+                        send_message(vk_api, peer_id, PAYMENT_RECEIPT_RECEIVED_TEXT)
                         continue
                     if action == "help" or text in {normalize_text(BUTTON_HELP), "помощь"}:
                         send_message(vk_api, peer_id, HELP_TEXT, get_main_keyboard())
                         continue
-                    send_message(vk_api, peer_id, "Выберите действие кнопками ниже", get_main_keyboard())
+                    send_message(vk_api, peer_id, FALLBACK_TEXT, get_main_keyboard())
                 except BackendApiError as exc:
                     logger.warning("Backend API error code=%s status=%s", exc.code, exc.status_code)
                     send_message(vk_api, peer_id, format_backend_error_message(exc), get_main_keyboard())
                 except Exception:
                     logger.exception("Ошибка обработки")
-                    send_message(vk_api, peer_id, "Произошла ошибка. Попробуйте позже.")
+                    send_message(vk_api, peer_id, "Произошла ошибка. Пожалуйста, попробуйте позже или откройте главное меню.")
                 time.sleep(0.01)
         except (ApiError, TimeoutError):
             logger.exception("Критическая ошибка Long Poll, перезапуск через 3 секунды")
