@@ -1,0 +1,151 @@
+import pytest
+import requests
+
+from config import load_config
+from services.web_api_client import WebApiClient, WebApiError
+
+
+class FakeResponse:
+    def __init__(self, status_code=200, payload=None, text="", json_error=False):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self._json_error = json_error
+        self.content = text.encode() if text else b"payload"
+
+    def json(self):
+        if self._json_error:
+            raise ValueError("not json")
+        return self._payload
+
+
+class FakeSession:
+    def __init__(self, response=None, exception=None):
+        self.response = response or FakeResponse(payload={"ok": True})
+        self.exception = exception
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, **kwargs})
+        if self.exception:
+            raise self.exception
+        return self.response
+
+
+def _set_required_config_env(monkeypatch):
+    monkeypatch.setenv("VK_GROUP_TOKEN", "test-token")
+    monkeypatch.setenv("VK_GROUP_ID", "123")
+    monkeypatch.setenv("ADMIN_ID", "456")
+    monkeypatch.setenv("BOT_API_TOKEN", "test-api-token")
+    monkeypatch.delenv("WEB_API_BASE_URL", raising=False)
+    monkeypatch.delenv("WEB_API_TIMEOUT_SECONDS", raising=False)
+
+
+def test_config_exposes_web_api_base_url_default(monkeypatch):
+    _set_required_config_env(monkeypatch)
+
+    config = load_config()
+
+    assert config.web_api_base_url == "https://bloomclub.ru"
+
+
+def test_config_exposes_web_api_timeout_seconds_default(monkeypatch):
+    _set_required_config_env(monkeypatch)
+
+    config = load_config()
+
+    assert config.web_api_timeout_seconds == 10
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://bloomclub.ru",
+        "https://bloomclub.ru/",
+        "https://bloomclub.ru/api/v1",
+    ],
+)
+def test_health_builds_api_v1_health_url_from_supported_base_urls(base_url):
+    session = FakeSession(response=FakeResponse(payload={"status": "ok"}))
+    client = WebApiClient(base_url, session=session)
+
+    client.health()
+
+    assert session.calls[0]["url"] == "https://bloomclub.ru/api/v1/health"
+
+
+def test_request_accepts_path_already_prefixed_with_api_v1():
+    session = FakeSession(response=FakeResponse(payload={"status": "ok"}))
+    client = WebApiClient("https://bloomclub.ru/", session=session)
+
+    client.request("GET", "/api/v1/health")
+
+    assert session.calls[0]["url"] == "https://bloomclub.ru/api/v1/health"
+
+
+def test_request_adds_authorization_header_only_when_token_provided():
+    session = FakeSession(response=FakeResponse(payload={"ok": True}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.request("GET", "/health")
+    client.request("GET", "/health", token="client-token")
+
+    assert "Authorization" not in session.calls[0]["headers"]
+    assert session.calls[1]["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_request_sends_timeout():
+    session = FakeSession(response=FakeResponse(payload={"ok": True}))
+    client = WebApiClient("https://bloomclub.ru", timeout_seconds=7, session=session)
+
+    client.request("GET", "/health")
+
+    assert session.calls[0]["timeout"] == 7
+
+
+def test_health_returns_parsed_json():
+    session = FakeSession(response=FakeResponse(payload={"status": "ok"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.health() == {"status": "ok"}
+
+
+def test_timeout_or_request_exception_maps_to_web_unavailable():
+    client = WebApiClient(
+        "https://bloomclub.ru",
+        session=FakeSession(exception=requests.RequestException("timed out")),
+    )
+
+    with pytest.raises(WebApiError) as exc_info:
+        client.health()
+
+    assert exc_info.value.code == "web_unavailable"
+    assert exc_info.value.status_code is None
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (401, "unauthenticated"),
+        (403, "forbidden"),
+        (404, "not_found"),
+        (422, "validation_error"),
+        (500, "server_error"),
+    ],
+)
+def test_status_errors_map_to_web_api_error_codes(status_code, expected_code):
+    response = FakeResponse(status_code=status_code, payload={"detail": "failed"})
+    client = WebApiClient("https://bloomclub.ru", session=FakeSession(response=response))
+
+    with pytest.raises(WebApiError) as exc_info:
+        client.health()
+
+    assert exc_info.value.code == expected_code
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.detail == "failed"
+
+
+def test_build_public_url_uses_root_public_path():
+    client = WebApiClient("https://bloomclub.ru/api/v1/")
+
+    assert client.build_public_url("/r/p/test") == "https://bloomclub.ru/r/p/test"
