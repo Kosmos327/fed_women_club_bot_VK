@@ -105,7 +105,7 @@ Scope этого PR: **documentation only**. Runtime-код, `main.py`, `service
 - Бот не должен хранить пароль пользователя или выполнять user-login от имени пользователя через сохранённые credentials.
 - Нельзя использовать admin token вместо client token: это нарушит user-level authorization, аудит действий и безопасность персональных данных.
 
-До появления согласованного auth/binding design VK bot не может корректно обращаться к client endpoints WEB от имени конкретной участницы.
+До появления согласованного auth/binding design VK bot не может корректно обращаться к client endpoints WEB от имени конкретной участницы. Подробный decision record: `docs/vk_web_auth_binding.md`.
 
 ## 8. Deep link gap
 
@@ -152,8 +152,8 @@ Scope этого PR: **documentation only**. Runtime-код, `main.py`, `service
 
 ### PR 3: VK ↔ WEB auth/binding design
 
-- Цель: описать и согласовать безопасный способ binding `vk_user_id` к WEB user/client token.
-- Файлы менять: design doc в `docs/`, возможно `.env.example` только для новых безопасных placeholders после утверждения.
+- Статус: decision record добавлен в `docs/vk_web_auth_binding.md`.
+- Рекомендация: для полноценного пользовательского сценария использовать one-time link code from WEB cabinet; для быстрой внутренней проверки допустим admin manual binding только со строгим bot service token exchange и limited client token/session.
 - Tests добавить: contract tests/fixtures для proposed binding endpoint после его появления.
 - Нельзя трогать: хранение пользовательских паролей в боте, admin-token impersonation, production auth behavior без утверждённого WEB endpoint.
 
