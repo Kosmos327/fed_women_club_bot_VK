@@ -2,7 +2,7 @@ import json
 import logging
 import random
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -315,7 +315,7 @@ def handle_vk_link_code(web_client: WebApiClient, vk_user_id: int | str, code: s
     if not token:
         return VK_LINK_WEB_UNAVAILABLE_TEXT
     user = _extract_web_user(payload)
-    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(UTC).isoformat())
+    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
     return format_link_success(user)
 
 
@@ -331,7 +331,7 @@ def restore_web_client_session(web_client: WebApiClient, vk_user_id: int | str, 
     token = _extract_web_token(payload)
     if not token:
         return False
-    set_web_client_session(vk_user_id, token, _extract_web_user(payload), linked_at=datetime.now(UTC).isoformat())
+    set_web_client_session(vk_user_id, token, _extract_web_user(payload), linked_at=datetime.now(timezone.utc).isoformat())
     return True
 
 
@@ -398,7 +398,7 @@ def handle_join_club(web_client: WebApiClient, vk_user_id: int | str, bot_token:
     token, user = extract_web_session_from_onboard_response(payload)
     if not token:
         return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
-    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(UTC).isoformat())
+    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
     return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city)
 
 
