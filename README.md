@@ -44,6 +44,10 @@ VK-бот для продукта **«Женский клуб»** — федер
 └── .gitignore                 # исключения secrets/cache/runtime
 ```
 
+## Документация
+
+- [VK bot architecture audit and WEB integration roadmap](docs/vk_bot_audit.md) — текущая архитектура бота, mismatch с WEB API, auth/binding gaps и staged roadmap интеграции.
+
 ## Env placeholders
 
 Скопируйте `.env.example` в локальный `.env` и заполните значения. `.env` не должен попадать в git.
