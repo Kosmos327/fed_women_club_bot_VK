@@ -107,6 +107,22 @@ class WebApiClient:
     def get_client_me(self, token: str) -> Any:
         return self.request("GET", "/clients/me", token=token)
 
+    def exchange_vk_link_code(self, vk_user_id: int | str, code: str, bot_token: str) -> Any:
+        return self.request(
+            "POST",
+            "/bot/vk/exchange-link-code",
+            token=bot_token,
+            json={"vk_user_id": str(vk_user_id), "code": code},
+        )
+
+    def get_vk_bound_token(self, vk_user_id: int | str, bot_token: str) -> Any:
+        return self.request(
+            "POST",
+            "/bot/vk/token",
+            token=bot_token,
+            json={"vk_user_id": str(vk_user_id)},
+        )
+
     def get_client_catalog_partners(
         self,
         token: str,

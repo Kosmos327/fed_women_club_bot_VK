@@ -149,3 +149,29 @@ def test_build_public_url_uses_root_public_path():
     client = WebApiClient("https://bloomclub.ru/api/v1/")
 
     assert client.build_public_url("/r/p/test") == "https://bloomclub.ru/r/p/test"
+
+
+def test_exchange_vk_link_code_builds_correct_request():
+    session = FakeSession(response=FakeResponse(payload={"access_token": "client-token"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.exchange_vk_link_code(123, "ABC12345", "bot-service-token")
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/bot/vk/exchange-link-code"
+    assert call["headers"]["Authorization"] == "Bearer bot-service-token"
+    assert call["json"] == {"vk_user_id": "123", "code": "ABC12345"}
+
+
+def test_get_vk_bound_token_builds_correct_request():
+    session = FakeSession(response=FakeResponse(payload={"access_token": "client-token"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.get_vk_bound_token(123, "bot-service-token")
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/bot/vk/token"
+    assert call["headers"]["Authorization"] == "Bearer bot-service-token"
+    assert call["json"] == {"vk_user_id": "123"}

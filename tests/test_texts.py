@@ -86,3 +86,52 @@ def test_legacy_terms_are_absent_from_user_texts():
 
     for term in forbidden_terms:
         assert term not in combined
+
+from services.web_api_client import WebApiError
+from state import get_user_state, get_web_client_token, reset_user_state
+
+
+class LinkSuccessClient:
+    def exchange_vk_link_code(self, vk_user_id, code, bot_token):
+        return {
+            "access_token": "client-token",
+            "user": {"email": "user@example.com", "role": "member"},
+        }
+
+
+class LinkErrorClient:
+    def __init__(self, error):
+        self.error = error
+
+    def exchange_vk_link_code(self, vk_user_id, code, bot_token):
+        raise self.error
+
+
+def test_link_success_handler_stores_token_user_and_returns_success_text():
+    reset_user_state(2001)
+
+    message = main.handle_vk_link_code(LinkSuccessClient(), 2001, "ABC12345", "bot-token")
+
+    assert get_web_client_token(2001) == "client-token"
+    assert get_user_state(2001)["web_client_user"] == {"email": "user@example.com", "role": "member"}
+    assert "VK привязан к личному кабинету" in message
+    assert "user@example.com" in message
+    assert "member" in message
+
+
+def test_link_404_maps_to_code_not_found_ux():
+    message = main.handle_vk_link_code(LinkErrorClient(WebApiError("not_found", status_code=404)), 2002, "ABC12345", "bot-token")
+
+    assert "Код привязки не найден" in message
+
+
+def test_link_401_maps_to_service_auth_ux():
+    message = main.handle_vk_link_code(LinkErrorClient(WebApiError("unauthenticated", status_code=401)), 2003, "ABC12345", "bot-token")
+
+    assert "Сервисная авторизация бота не настроена" in message
+
+
+def test_link_web_unavailable_maps_to_unavailable_ux():
+    message = main.handle_vk_link_code(LinkErrorClient(WebApiError("web_unavailable")), 2004, "ABC12345", "bot-token")
+
+    assert "WEB-сервис временно недоступен" in message
