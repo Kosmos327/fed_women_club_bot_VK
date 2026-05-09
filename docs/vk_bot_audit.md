@@ -144,10 +144,11 @@ Scope этого PR: **documentation only**. Runtime-код, `main.py`, `service
 
 ### PR 2: isolated WEB API client foundation
 
-- Цель: добавить изолированный WEB API client без подключения к runtime routes.
-- Файлы менять: новый модуль наподобие `services/web_api_client.py`, tests для URL/path/header/error handling, возможно docs с contract notes.
-- Tests добавить: unit tests на base URL normalization, Bearer JWT header, typed errors, `/api/v1/health` и mock responses.
-- Нельзя трогать: существующий `BackendGateway` behavior, `main.py` runtime dispatch, payment flow, env/secrets.
+- Статус: foundation добавлен в `services/web_api_client.py` и покрыт unit tests без реальных network calls.
+- Добавлены optional config placeholders `WEB_API_BASE_URL` и `WEB_API_TIMEOUT_SECONDS` для актуального WEB `/api/v1/...` client.
+- Client умеет нормализовать `https://bloomclub.ru`, `https://bloomclub.ru/` и `https://bloomclub.ru/api/v1`, строить `/api/v1/...` URLs, добавлять Bearer client token только при явной передаче, парсить JSON/text responses и маппить HTTP/network failures в typed `WebApiError`.
+- Runtime routes не менялись: `main.py`, текущий `services/backend_gateway.py`, меню VK bot, `verify_partner` и payment flow остаются на прежнем bot-specific contract.
+- VK↔WEB auth/binding всё ещё не реализован; до появления client token binding catalog/verify не считаются end-to-end совместимыми с WEB API.
 
 ### PR 3: VK ↔ WEB auth/binding design
 

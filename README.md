@@ -37,7 +37,8 @@ VK-бот для продукта **«Женский клуб»** — федер
 ├── diagnostics.py             # debug/health helpers
 ├── vk_attachments.py          # извлечение URL из VK-вложений
 ├── services/
-│   └── backend_gateway.py     # HTTP gateway к WEB/CRM API
+│   ├── backend_gateway.py     # текущий HTTP gateway к bot-specific WEB/CRM API
+│   └── web_api_client.py      # изолированный foundation client для актуального WEB /api/v1
 ├── tests/                     # pytest-проверки VK bot MVP
 ├── requirements.txt           # Python-зависимости
 ├── .env.example               # безопасные env placeholders
@@ -59,6 +60,8 @@ ADMIN_ID=123456789
 VK_BOT_USE_BACKEND=true
 BACKEND_BASE_URL=https://women-club.example/api/v1
 BOT_API_TOKEN=your_bot_api_token
+WEB_API_BASE_URL=https://bloomclub.ru
+WEB_API_TIMEOUT_SECONDS=10
 CLUB_INVITE_LINK=https://women-club.example/invite
 ```
 
@@ -66,6 +69,7 @@ CLUB_INVITE_LINK=https://women-club.example/invite
 
 - `VK_GROUP_TOKEN` и `BOT_API_TOKEN` не хардкодятся в коде.
 - `BACKEND_BASE_URL` использует безопасный placeholder `https://women-club.example/api/v1`.
+- `WEB_API_BASE_URL` и `WEB_API_TIMEOUT_SECONDS` настраивают изолированный WEB API client foundation для актуальных `/api/v1/...` endpoints. Этот client пока не подключён к runtime flow VK bot; для end-to-end каталога и `verify_partner` всё ещё нужен отдельный VK↔WEB auth/binding contract.
 - Production env, runtime-файлы и логи не переносятся в репозиторий.
 - WEB repo в рамках изменений VK-бота не деплоится и не изменяется.
 

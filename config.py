@@ -11,6 +11,8 @@ class Config:
     backend_base_url: str
     bot_api_token: str
     vk_bot_use_backend: bool
+    web_api_base_url: str
+    web_api_timeout_seconds: int
 
 
 def _get_required_env(name: str) -> str:
@@ -37,6 +39,8 @@ def load_config() -> Config:
         "https://women-club.example/api/v1",
     ).strip()
     bot_api_token = os.getenv("BOT_API_TOKEN", "").strip()
+    web_api_base_url = os.getenv("WEB_API_BASE_URL", "https://bloomclub.ru").strip()
+    web_api_timeout_seconds = int(os.getenv("WEB_API_TIMEOUT_SECONDS", "10").strip() or "10")
 
     if use_backend:
         if not backend_base_url:
@@ -56,4 +60,6 @@ def load_config() -> Config:
         backend_base_url=backend_base_url,
         bot_api_token=bot_api_token,
         vk_bot_use_backend=use_backend,
+        web_api_base_url=web_api_base_url,
+        web_api_timeout_seconds=web_api_timeout_seconds,
     )
