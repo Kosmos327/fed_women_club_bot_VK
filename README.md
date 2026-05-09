@@ -48,6 +48,7 @@ VK-бот для продукта **«Женский клуб»** — федер
 ## Документация
 
 - [VK bot architecture audit and WEB integration roadmap](docs/vk_bot_audit.md) — текущая архитектура бота, mismatch с WEB API, auth/binding gaps и staged roadmap интеграции.
+- [VK ↔ WEB auth/binding decision record](docs/vk_web_auth_binding.md) — безопасная схема привязки `vk_user_id` к WEB client user/token перед подключением каталога и verify.
 
 ## Env placeholders
 
