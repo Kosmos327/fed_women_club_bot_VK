@@ -23,6 +23,15 @@ def parse_code_command(text: str | None) -> int | None:
     return _parse_id(r"код\s+(\d+)", text)
 
 
+def parse_link_code_command(text: str | None) -> str | None:
+    if not text:
+        return None
+    match = re.fullmatch(r"(?:привязать|link|код)\s+([A-Za-z0-9]{8})", text.strip(), flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip().upper()
+
+
 def is_legacy_discount_command(text: str | None) -> bool:
     return bool(text and re.fullmatch(r"скидка\s+\d+", text.strip(), flags=re.IGNORECASE))
 

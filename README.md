@@ -17,6 +17,7 @@ VK-бот для продукта **«Женский клуб»** — федер
 - **Подтвердить привилегию через QR** — текущий flow `verify_partner_<id>` сохраняется; бот показывает код подтверждения, срок действия 5 минут и просит показать экран сотруднику партнёра.
 - **Оплатить/продлить подписку** — раздел `💳 Оплатить / Продлить` создаёт заявку на оплату через существующий backend gateway.
 - **Посмотреть свои привилегии** — раздел `🎁 Мои привилегии` использует существующий API-совместимый flow кодов.
+- **Привязать WEB-кабинет** — участница создаёт одноразовый VK-код в профиле bloomclub.ru и отправляет в VK команду `Привязать <код>`; также доступны `link <код>`, `код <код>` и `Статус привязки`.
 
 ## City selection MVP
 
@@ -70,7 +71,8 @@ CLUB_INVITE_LINK=https://women-club.example/invite
 
 - `VK_GROUP_TOKEN` и `BOT_API_TOKEN` не хардкодятся в коде.
 - `BACKEND_BASE_URL` использует безопасный placeholder `https://women-club.example/api/v1`.
-- `WEB_API_BASE_URL` и `WEB_API_TIMEOUT_SECONDS` настраивают изолированный WEB API client foundation для актуальных `/api/v1/...` endpoints. Этот client пока не подключён к runtime flow VK bot; для end-to-end каталога и `verify_partner` всё ещё нужен отдельный VK↔WEB auth/binding contract.
+- `WEB_API_BASE_URL` и `WEB_API_TIMEOUT_SECONDS` настраивают WEB API client foundation для актуальных `/api/v1/...` endpoints. В runtime подключён только безопасный link-code exchange/status foundation; каталог, verify и payment остаются на существующем backend gateway flow.
+- `BOT_API_TOKEN` должен совпадать с WEB `BOT_API_TOKEN` для service endpoints `/api/v1/bot/vk/*`. Этот же env продолжает использоваться текущим `services/backend_gateway.py`, отдельный secret для WEB не добавляется.
 - Production env, runtime-файлы и логи не переносятся в репозиторий.
 - WEB repo в рамках изменений VK-бота не деплоится и не изменяется.
 

@@ -2,7 +2,7 @@ import json
 import logging
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -40,9 +40,10 @@ from keyboards import (
     get_verify_error_keyboard,
     get_verify_success_keyboard,
 )
-from routing import parse_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
+from routing import parse_code_command, parse_link_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
 from services.backend_gateway import BackendApiError, BackendGateway
-from state import USER_STATE, clear_user_flow_state, get_user_state
+from services.web_api_client import WebApiClient, WebApiError
+from state import USER_STATE, clear_user_flow_state, get_user_state, get_web_client_token, set_web_client_session
 from texts import (
     BACKEND_UNAVAILABLE_TEXT,
     FALLBACK_TEXT,
@@ -65,6 +66,12 @@ from texts import (
     SUBSCRIPTION_INACTIVE_TEXT,
     VERIFY_PARTNER_NOT_FOUND_TEXT,
     VERIFY_PRIVILEGE_FAILED_TEXT,
+    VK_LINK_CODE_INVALID_TEXT,
+    VK_LINK_CODE_NOT_FOUND_TEXT,
+    VK_LINK_SERVICE_AUTH_ERROR_TEXT,
+    VK_LINK_STATUS_ACTIVE_TEXT,
+    VK_LINK_STATUS_INACTIVE_TEXT,
+    VK_LINK_WEB_UNAVAILABLE_TEXT,
     WELCOME_TEXT,
 )
 from vk_attachments import extract_attachment_url
@@ -252,10 +259,85 @@ def handle_verify_partner(gateway: BackendGateway, vk_user_id: int | str, partne
     return VERIFY_PRIVILEGE_FAILED_TEXT, get_verify_error_keyboard()
 
 
+
+def _extract_web_token(payload: dict) -> str | None:
+    for key in ("access_token", "token", "client_token"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _extract_web_user(payload: dict) -> dict:
+    for key in ("user", "client", "client_user"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def format_link_success(user: dict | None) -> str:
+    user = user or {}
+    lines = ["VK привязан к личному кабинету"]
+    contact = user.get("email") or user.get("phone")
+    if contact:
+        lines.append(f"Контакт: {contact}")
+    role = user.get("role")
+    if role:
+        lines.append(f"Роль: {role}")
+    lines.extend(["", "Теперь можно использовать WEB-привилегии в боте."])
+    return "\n".join(lines)
+
+
+def map_web_api_error_to_link_text(error: WebApiError) -> str:
+    if error.code == "unauthenticated" or error.status_code == 401:
+        return VK_LINK_SERVICE_AUTH_ERROR_TEXT
+    if error.code == "not_found" or error.status_code == 404:
+        return VK_LINK_CODE_NOT_FOUND_TEXT
+    if error.code in {"client_error", "validation_error"} or error.status_code in {400, 422}:
+        return VK_LINK_CODE_INVALID_TEXT
+    return VK_LINK_WEB_UNAVAILABLE_TEXT
+
+
+def handle_vk_link_code(web_client: WebApiClient, vk_user_id: int | str, code: str, bot_token: str) -> str:
+    try:
+        payload = web_client.exchange_vk_link_code(vk_user_id, code, bot_token)
+    except WebApiError as exc:
+        return map_web_api_error_to_link_text(exc)
+    if not isinstance(payload, dict):
+        return VK_LINK_WEB_UNAVAILABLE_TEXT
+    token = _extract_web_token(payload)
+    if not token:
+        return VK_LINK_WEB_UNAVAILABLE_TEXT
+    user = _extract_web_user(payload)
+    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(UTC).isoformat())
+    return format_link_success(user)
+
+
+def restore_web_client_session(web_client: WebApiClient, vk_user_id: int | str, bot_token: str) -> bool:
+    if get_web_client_token(vk_user_id):
+        return True
+    try:
+        payload = web_client.get_vk_bound_token(vk_user_id, bot_token)
+    except WebApiError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    token = _extract_web_token(payload)
+    if not token:
+        return False
+    set_web_client_session(vk_user_id, token, _extract_web_user(payload), linked_at=datetime.now(UTC).isoformat())
+    return True
+
+
+def format_web_link_status(is_linked: bool) -> str:
+    return VK_LINK_STATUS_ACTIVE_TEXT if is_linked else VK_LINK_STATUS_INACTIVE_TEXT
+
 def main() -> None:
     load_dotenv()
     config = load_config()
     gateway = BackendGateway(config.backend_base_url, config.bot_api_token) if config.vk_bot_use_backend else None
+    web_client = WebApiClient(config.web_api_base_url, config.web_api_timeout_seconds)
 
     vk_session = VkApi(token=config.vk_group_token)
     vk_api = vk_session.get_api()
@@ -294,6 +376,7 @@ def main() -> None:
                     if text in {"/start", "start", "начать"}:
                         profile = vk_api.users.get(user_ids=from_id)[0]
                         gateway.auth_vk_user(from_id, profile.get("first_name"), profile.get("last_name"), profile.get("screen_name"))
+                        restore_web_client_session(web_client, from_id, config.bot_api_token)
                         send_message(vk_api, peer_id, WELCOME_TEXT, get_main_keyboard())
                         continue
                     if action == "main_menu" or text in {normalize_text(BUTTON_MAIN_MENU), "меню"}:
@@ -301,6 +384,14 @@ def main() -> None:
                         send_message(vk_api, peer_id, MAIN_MENU_TEXT, get_main_keyboard())
                         continue
                     state = get_user_state(from_id)
+                    link_code = parse_link_code_command(raw_text)
+                    if link_code:
+                        send_message(vk_api, peer_id, handle_vk_link_code(web_client, from_id, link_code, config.bot_api_token), get_main_keyboard())
+                        continue
+                    if text == "статус привязки":
+                        is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
+                        send_message(vk_api, peer_id, format_web_link_status(is_linked), get_main_keyboard())
+                        continue
                     if action == "city_select" or text == normalize_text(BUTTON_CITY):
                         send_message(vk_api, peer_id, "Выберите город", get_city_keyboard())
                         continue
@@ -368,7 +459,8 @@ def main() -> None:
                         send_message(vk_api, peer_id, format_code_item(code_data))
                         continue
                     if action == "my_codes" or text == normalize_text(BUTTON_MY_CODES):
-                        send_message(vk_api, peer_id, MY_PRIVILEGES_FILTER_TEXT, get_codes_filter_keyboard())
+                        is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
+                        send_message(vk_api, peer_id, f"{MY_PRIVILEGES_FILTER_TEXT}\n\nWEB-привязка: {'активна' if is_linked else 'не активна'}", get_codes_filter_keyboard())
                         continue
                     if action == "codes_filter":
                         status = payload.get("status")
