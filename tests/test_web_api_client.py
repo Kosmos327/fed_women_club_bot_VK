@@ -175,3 +175,19 @@ def test_get_vk_bound_token_builds_correct_request():
     assert call["url"] == "https://bloomclub.ru/api/v1/bot/vk/token"
     assert call["headers"]["Authorization"] == "Bearer bot-service-token"
     assert call["json"] == {"vk_user_id": "123"}
+
+
+def test_onboard_vk_client_builds_correct_request_with_city_slug():
+    session = FakeSession(response=FakeResponse(payload={"access_token": "client-token"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.onboard_vk_client(123, "bot-service-token", selected_city_slug="novosibirsk")
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/bot/vk/onboard-client"
+    assert call["headers"]["Authorization"] == "Bearer bot-service-token"
+    assert call["json"]["vk_user_id"] == "123"
+    assert call["json"]["source"] == "vk"
+    assert call["json"]["selected_city_slug"] == "novosibirsk"
+    assert call["json"]["full_name"] is None

@@ -135,3 +135,95 @@ def test_link_web_unavailable_maps_to_unavailable_ux():
     message = main.handle_vk_link_code(LinkErrorClient(WebApiError("web_unavailable")), 2004, "ABC12345", "bot-token")
 
     assert "WEB-сервис временно недоступен" in message
+
+
+class JoinSuccessClient:
+    def __init__(self, payload=None):
+        self.calls = []
+        self.payload = payload or {
+            "access_token": "client-token",
+            "user": {"id": 10, "email": "user@example.com"},
+            "client": {"id": 20},
+            "is_new": True,
+            "password_setup_required": True,
+        }
+
+    def onboard_vk_client(self, vk_user_id, bot_token, selected_city_slug=None, full_name=None, source="vk"):
+        self.calls.append(
+            {
+                "vk_user_id": vk_user_id,
+                "bot_token": bot_token,
+                "selected_city_slug": selected_city_slug,
+                "full_name": full_name,
+                "source": source,
+            }
+        )
+        return self.payload
+
+
+class JoinErrorClient:
+    def __init__(self, error):
+        self.error = error
+        self.calls = []
+
+    def onboard_vk_client(self, vk_user_id, bot_token, selected_city_slug=None, full_name=None, source="vk"):
+        self.calls.append({"selected_city_slug": selected_city_slug})
+        raise self.error
+
+
+class JoinCityRetryClient:
+    def __init__(self):
+        self.calls = []
+
+    def onboard_vk_client(self, vk_user_id, bot_token, selected_city_slug=None, full_name=None, source="vk"):
+        self.calls.append({"selected_city_slug": selected_city_slug})
+        if selected_city_slug:
+            raise WebApiError("not_found", status_code=404)
+        return {"access_token": "client-token", "user": {"id": 10}, "is_new": True}
+
+
+def test_join_success_new_user_text_contains_created_and_stores_token():
+    reset_user_state(3001)
+    client = JoinSuccessClient()
+
+    message = main.handle_join_club(client, 3001, "bot-token", selected_city="Новосибирск")
+
+    assert "Личный кабинет создан" in message
+    assert "Пароль в VK не отправляется" in message
+    assert "WEB-привязка: активна" in message
+    assert get_web_client_token(3001) == "client-token"
+    assert get_user_state(3001)["web_client_user"]["email"] == "user@example.com"
+    assert client.calls[0]["selected_city_slug"] == "novosibirsk"
+
+
+def test_join_success_existing_user_text_contains_already_created():
+    reset_user_state(3002)
+    client = JoinSuccessClient(payload={"access_token": "client-token", "user": {"id": 10}, "is_new": False})
+
+    message = main.handle_join_club(client, 3002, "bot-token")
+
+    assert "уже был создан" in message
+    assert get_web_client_token(3002) == "client-token"
+
+
+def test_join_401_maps_to_service_auth_ux():
+    message = main.handle_join_club(JoinErrorClient(WebApiError("unauthenticated", status_code=401)), 3003, "bot-token")
+
+    assert "Сервисная авторизация бота не настроена" in message
+
+
+def test_join_web_unavailable_maps_to_unavailable_ux():
+    message = main.handle_join_club(JoinErrorClient(WebApiError("web_unavailable")), 3004, "bot-token")
+
+    assert "WEB-сервис временно недоступен" in message
+
+
+def test_join_city_404_retries_without_city_slug():
+    reset_user_state(3005)
+    client = JoinCityRetryClient()
+
+    message = main.handle_join_club(client, 3005, "bot-token", selected_city="Новосибирск")
+
+    assert client.calls == [{"selected_city_slug": "novosibirsk"}, {"selected_city_slug": None}]
+    assert "Город можно будет выбрать позже" in message
+    assert get_web_client_token(3005) == "client-token"

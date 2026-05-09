@@ -19,3 +19,10 @@ def test_parse_link_code_command_recognizes_link_command():
 def test_parse_link_code_command_rejects_unrelated_text():
     assert parse_link_code_command("покажи партнёров ABC12345") is None
     assert parse_link_code_command("ABC12345") is None
+
+
+def test_join_club_text_phrase_is_routed_by_main_handler_source():
+    source = open("main.py", encoding="utf-8").read()
+
+    assert 'action == "join_club"' in source
+    assert '"присоединиться к клубу" in text' in source

@@ -11,11 +11,13 @@ from vk_api import VkApi
 from vk_api.bot_longpoll import VkBotEventType, VkBotLongPoll
 from vk_api.exceptions import ApiError
 
+from city_mapping import get_web_known_city_slug
 from config import load_config
 from diagnostics import format_debug_status, format_health_status
 from keyboards import (
     BUTTON_CITY,
     BUTTON_HELP,
+    BUTTON_JOIN_CLUB,
     BUTTON_MAIN_MENU,
     BUTTON_MY_CODES,
     BUTTON_PARTNERS,
@@ -48,6 +50,9 @@ from texts import (
     BACKEND_UNAVAILABLE_TEXT,
     FALLBACK_TEXT,
     HELP_TEXT,
+    JOIN_CLUB_GENERIC_ERROR_TEXT,
+    JOIN_CLUB_SERVICE_AUTH_ERROR_TEXT,
+    JOIN_CLUB_WEB_UNAVAILABLE_TEXT,
     MAIN_MENU_TEXT,
     MY_PRIVILEGES_EMPTY_TEXT,
     MY_PRIVILEGES_FILTER_TEXT,
@@ -333,6 +338,70 @@ def restore_web_client_session(web_client: WebApiClient, vk_user_id: int | str, 
 def format_web_link_status(is_linked: bool) -> str:
     return VK_LINK_STATUS_ACTIVE_TEXT if is_linked else VK_LINK_STATUS_INACTIVE_TEXT
 
+
+def extract_web_session_from_onboard_response(response: dict) -> tuple[str | None, dict]:
+    token = _extract_web_token(response)
+    user = _extract_web_user(response)
+    client = response.get("client")
+    if isinstance(client, dict) and client:
+        user = {**client, **user}
+    return token, user
+
+
+def build_join_club_success_text(response: dict, city_retry_without_slug: bool = False) -> str:
+    if response.get("is_new") is True:
+        first_line = "Личный кабинет создан"
+    else:
+        first_line = "Личный кабинет уже был создан, доступ обновлён"
+    lines = [
+        first_line,
+        "",
+        "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
+        "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
+        "Пароль в VK не отправляется. Вход по паролю в WEB будет подключён через безопасную установку пароля.",
+    ]
+    if city_retry_without_slug:
+        lines.append("Город можно будет выбрать позже в личном кабинете.")
+    lines.append("WEB-привязка: активна")
+    return "\n".join(lines)
+
+
+def map_join_club_error(error: WebApiError) -> str:
+    if error.code == "unauthenticated" or error.status_code == 401:
+        return JOIN_CLUB_SERVICE_AUTH_ERROR_TEXT
+    if error.code in {"web_unavailable", "server_error"} or (error.status_code and error.status_code >= 500):
+        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
+    return JOIN_CLUB_GENERIC_ERROR_TEXT
+
+
+def handle_join_club(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> str:
+    selected_city_slug = get_web_known_city_slug(selected_city)
+    retried_without_city = False
+    try:
+        payload = web_client.onboard_vk_client(
+            vk_user_id,
+            bot_token,
+            selected_city_slug=selected_city_slug,
+            source="vk",
+        )
+    except WebApiError as exc:
+        if selected_city_slug and (exc.code == "not_found" or exc.status_code == 404):
+            try:
+                payload = web_client.onboard_vk_client(vk_user_id, bot_token, selected_city_slug=None, source="vk")
+                retried_without_city = True
+            except WebApiError as retry_exc:
+                return map_join_club_error(retry_exc)
+        else:
+            return map_join_club_error(exc)
+    if not isinstance(payload, dict):
+        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
+    token, user = extract_web_session_from_onboard_response(payload)
+    if not token:
+        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
+    set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(UTC).isoformat())
+    return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city)
+
+
 def main() -> None:
     load_dotenv()
     config = load_config()
@@ -391,6 +460,14 @@ def main() -> None:
                     if text == "статус привязки":
                         is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
                         send_message(vk_api, peer_id, format_web_link_status(is_linked), get_main_keyboard())
+                        continue
+                    if action == "join_club" or "присоединиться к клубу" in text:
+                        send_message(
+                            vk_api,
+                            peer_id,
+                            handle_join_club(web_client, from_id, config.bot_api_token, selected_city=state.get("selected_city")),
+                            get_main_keyboard(),
+                        )
                         continue
                     if action == "city_select" or text == normalize_text(BUTTON_CITY):
                         send_message(vk_api, peer_id, "Выберите город", get_city_keyboard())
