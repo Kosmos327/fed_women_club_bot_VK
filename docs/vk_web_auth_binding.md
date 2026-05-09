@@ -230,3 +230,12 @@ VK bot now includes a small runtime foundation for the WEB one-time link-code co
 - status UX: `Статус привязки` and a passive `WEB-привязка: активна/не активна` line in `🎁 Мои привилегии`.
 
 This foundation intentionally does **not** migrate catalog, verify, subscription, payment or existing `BackendGateway` runtime flows to WEB client-token calls yet. The bot still does not ask for or store WEB passwords.
+
+
+## 11. VK onboarding button added
+
+VK bot now includes the `💗 Присоединиться к клубу` main-menu button with payload action `join_club`. The handler calls `POST /api/v1/bot/vk/onboard-client` through `WebApiClient` using the existing `BOT_API_TOKEN`, sends `vk_user_id` as a string, and stores the returned client token/user payload in in-memory `USER_STATE` as `web_client_token` / `web_client_user`.
+
+Selected city is passed only when the current `selected_city` has a WEB-known safe slug (`Новосибирск` → `novosibirsk`, `Череповец` → `cherepovets`). Other cities are omitted to avoid onboarding failures while WEB has a smaller city set. If WEB returns 404 for a selected city, the bot retries onboarding once without `selected_city_slug`.
+
+This flow does not ask for, generate, store, or send WEB passwords in VK. It also does **not** activate a subscription, create a payment, or migrate catalog/verify/payment runtime from the existing `BackendGateway` flow.

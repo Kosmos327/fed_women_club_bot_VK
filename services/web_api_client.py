@@ -123,6 +123,26 @@ class WebApiClient:
             json={"vk_user_id": str(vk_user_id)},
         )
 
+    def onboard_vk_client(
+        self,
+        vk_user_id: int | str,
+        bot_token: str,
+        selected_city_slug: str | None = None,
+        full_name: str | None = None,
+        source: str = "vk",
+    ) -> Any:
+        return self.request(
+            "POST",
+            "/bot/vk/onboard-client",
+            token=bot_token,
+            json={
+                "vk_user_id": str(vk_user_id),
+                "source": source,
+                "selected_city_slug": selected_city_slug,
+                "full_name": full_name,
+            },
+        )
+
     def get_client_catalog_partners(
         self,
         token: str,

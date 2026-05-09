@@ -2,6 +2,7 @@ import json
 from typing import Iterable
 
 BUTTON_SUBSCRIPTION = "💗 Подписка"
+BUTTON_JOIN_CLUB = "💗 Присоединиться к клубу"
 BUTTON_PARTNERS = "✨ Партнёры и скидки"
 BUTTON_MY_CODES = "🎁 Мои привилегии"
 BUTTON_PAY = "💳 Оплатить / Продлить"
@@ -57,6 +58,7 @@ def _keyboard(rows: Iterable[Iterable[dict]], one_time: bool = False) -> str:
 def get_main_keyboard() -> str:
     return _keyboard(
         [
+            [_button(BUTTON_JOIN_CLUB, "join_club", "primary")],
             [_button(BUTTON_SUBSCRIPTION, "subscription", "primary")],
             [_button(BUTTON_PARTNERS, "partners", "primary")],
             [_button(BUTTON_MY_CODES, "my_codes"), _button(BUTTON_PAY, "pay", "positive")],

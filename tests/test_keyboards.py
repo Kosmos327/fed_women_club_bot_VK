@@ -12,6 +12,7 @@ def test_main_keyboard_contains_women_club_buttons():
     labels = _labels(get_main_keyboard())
 
     assert labels == [
+        "💗 Присоединиться к клубу",
         "💗 Подписка",
         "✨ Партнёры и скидки",
         "🎁 Мои привилегии",
