@@ -1,6 +1,14 @@
 import json
 
-from keyboards import CITIES, WOMEN_CATEGORIES, get_categories_keyboard, get_city_keyboard, get_main_keyboard
+from keyboards import (
+    BUTTON_PASSWORD_SETUP,
+    CITIES,
+    WOMEN_CATEGORIES,
+    get_categories_keyboard,
+    get_city_keyboard,
+    get_main_keyboard,
+    get_password_setup_keyboard,
+)
 
 
 def _labels(keyboard_json: str) -> list[str]:
@@ -52,3 +60,24 @@ def test_city_keyboard_contains_five_mvp_cities():
     assert CITIES == ["Новосибирск", "Москва", "Санкт-Петербург", "Екатеринбург", "Казань"]
     for city in CITIES:
         assert city in labels
+
+
+def _actions(keyboard_json: str) -> list[dict]:
+    keyboard = json.loads(keyboard_json)
+    return [button["action"] for row in keyboard["buttons"] for button in row]
+
+
+def test_password_setup_keyboard_adds_vk_open_link_button_for_valid_url():
+    setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
+
+    actions = _actions(get_password_setup_keyboard(setup_url))
+
+    assert actions[0] == {"type": "open_link", "label": BUTTON_PASSWORD_SETUP, "link": setup_url}
+    assert "💗 Присоединиться к клубу" in [action["label"] for action in actions]
+
+
+def test_password_setup_keyboard_skips_invalid_url_and_keeps_menu_buttons():
+    password_keyboard = get_password_setup_keyboard("javascript:alert(1)")
+
+    assert _labels(password_keyboard) == _labels(get_main_keyboard())
+    assert all(action["type"] == "text" for action in _actions(password_keyboard))

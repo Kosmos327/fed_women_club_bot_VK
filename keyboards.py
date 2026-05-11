@@ -1,5 +1,6 @@
 import json
 from typing import Iterable
+from urllib.parse import urlparse
 
 BUTTON_SUBSCRIPTION = "💗 Подписка"
 BUTTON_JOIN_CLUB = "💗 Присоединиться к клубу"
@@ -9,6 +10,7 @@ BUTTON_PAY = "💳 Оплатить / Продлить"
 BUTTON_CITY = "🌸 Выбрать город"
 BUTTON_HELP = "❓ Помощь"
 BUTTON_MAIN_MENU = "🏠 Главное меню"
+BUTTON_PASSWORD_SETUP = "Задать пароль для WEB-кабинета"
 
 CITIES = [
     "Новосибирск",
@@ -48,6 +50,17 @@ def _button(label: str, action: str, color: str = "secondary", **payload) -> dic
     }
 
 
+def is_valid_open_link_url(url: object) -> bool:
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _url_button(label: str, url: str) -> dict:
+    return {"action": {"type": "open_link", "label": label, "link": url.strip()}}
+
+
 def _keyboard(rows: Iterable[Iterable[dict]], one_time: bool = False) -> str:
     return json.dumps(
         {"one_time": one_time, "inline": False, "buttons": [list(row) for row in rows]},
@@ -55,16 +68,26 @@ def _keyboard(rows: Iterable[Iterable[dict]], one_time: bool = False) -> str:
     )
 
 
+def _main_keyboard_rows() -> list[list[dict]]:
+    return [
+        [_button(BUTTON_JOIN_CLUB, "join_club", "primary")],
+        [_button(BUTTON_SUBSCRIPTION, "subscription", "primary")],
+        [_button(BUTTON_PARTNERS, "partners", "primary")],
+        [_button(BUTTON_MY_CODES, "my_codes"), _button(BUTTON_PAY, "pay", "positive")],
+        [_button(BUTTON_CITY, "city_select"), _button(BUTTON_HELP, "help")],
+    ]
+
+
 def get_main_keyboard() -> str:
-    return _keyboard(
-        [
-            [_button(BUTTON_JOIN_CLUB, "join_club", "primary")],
-            [_button(BUTTON_SUBSCRIPTION, "subscription", "primary")],
-            [_button(BUTTON_PARTNERS, "partners", "primary")],
-            [_button(BUTTON_MY_CODES, "my_codes"), _button(BUTTON_PAY, "pay", "positive")],
-            [_button(BUTTON_CITY, "city_select"), _button(BUTTON_HELP, "help")],
-        ]
-    )
+    return _keyboard(_main_keyboard_rows())
+
+
+def get_password_setup_keyboard(password_setup_url: object) -> str:
+    rows = []
+    if is_valid_open_link_url(password_setup_url):
+        rows.append([_url_button(BUTTON_PASSWORD_SETUP, str(password_setup_url))])
+    rows.extend(_main_keyboard_rows())
+    return _keyboard(rows)
 
 
 def get_nav_keyboard() -> str:
