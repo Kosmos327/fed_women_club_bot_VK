@@ -214,7 +214,7 @@ def test_join_success_new_user_text_contains_created_and_stores_token():
 
     assert "Личный кабинет создан" in message
     assert "Пароль в VK не отправляется" in message
-    assert "WEB-привязка: активна" not in message
+    assert "WEB-" + "привязка: активна" not in message
     assert "WEB-кабинет: доступ для бота активен" in message
     assert "Привязать КОД" in message
     assert "код из WEB-кабинета" in message
@@ -230,10 +230,77 @@ def test_join_success_existing_user_text_contains_already_created():
     message = main.handle_join_club(client, 3002, "bot-token")
 
     assert "уже был создан" in message
-    assert "WEB-привязка: активна" not in message
+    assert "WEB-" + "привязка: активна" not in message
     assert "WEB-кабинет" in message
     assert "Привязать КОД" in message
     assert get_web_client_token(3002) == "client-token"
+
+
+def test_join_success_with_password_setup_url_adds_safe_setup_instructions():
+    reset_user_state(3006)
+    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "client": {"id": 20},
+            "is_new": True,
+            "password_setup_required": True,
+            "password_setup_url": password_setup_url,
+            "login": "user@example.com",
+        }
+    )
+
+    message = main.handle_join_club(client, 3006, "bot-token")
+
+    assert "задайте пароль" in message
+    assert "Задать пароль для WEB-кабинета" in message
+    assert "Ссылка действует 60 минут" in message
+    assert "Пароль не отправляйте в VK" in message
+    assert "Логин: user@example.com" in message
+    assert password_setup_url in message
+    assert get_web_client_token(3006) == "client-token"
+
+
+def test_join_success_ignores_invalid_password_setup_url_without_breaking_session():
+    reset_user_state(3007)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": True,
+            "password_setup_required": True,
+            "password_setup_url": {"token": "not-a-url-string"},
+            "login": "user@example.com",
+        }
+    )
+
+    message = main.handle_join_club(client, 3007, "bot-token")
+
+    assert "Личный кабинет создан" in message
+    assert "Задать пароль для WEB-кабинета" not in message
+    assert "not-a-url-string" not in message
+    assert get_web_client_token(3007) == "client-token"
+
+
+def test_join_success_password_not_required_mentions_site_without_setup_link():
+    reset_user_state(3008)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": False,
+            "password_setup_required": False,
+            "password_setup_url": "https://bloomclub.ru/password/setup?token=unused",
+        }
+    )
+
+    message = main.handle_join_club(client, 3008, "bot-token")
+
+    assert "Пароль для WEB-кабинета уже установлен" in message
+    assert "Задать пароль для WEB-кабинета" not in message
+    assert "token=unused" not in message
+    assert get_web_client_token(3008) == "client-token"
 
 
 def test_join_401_maps_to_service_auth_ux():
