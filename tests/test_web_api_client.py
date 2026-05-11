@@ -191,3 +191,21 @@ def test_onboard_vk_client_builds_correct_request_with_city_slug():
     assert call["json"]["source"] == "vk"
     assert call["json"]["selected_city_slug"] == "novosibirsk"
     assert call["json"]["full_name"] is None
+
+
+def test_onboard_vk_client_returns_password_setup_fields_unfiltered():
+    payload = {
+        "access_token": "client-token",
+        "user": {"id": 10},
+        "client": {"id": 20},
+        "is_new": True,
+        "password_setup_url": "https://bloomclub.ru/password/setup?token=one-time-token",
+        "login": "user@example.com",
+        "password_setup_expires_at": "2026-05-11T12:00:00Z",
+        "password_setup_ttl_seconds": 3600,
+        "password_setup_required": True,
+    }
+    session = FakeSession(response=FakeResponse(payload=payload))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.onboard_vk_client(123, "bot-service-token") == payload

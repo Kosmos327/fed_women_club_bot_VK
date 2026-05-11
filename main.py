@@ -366,16 +366,38 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
         first_line = "Личный кабинет создан"
     else:
         first_line = "Личный кабинет уже был создан, доступ обновлён"
+
+    password_setup_url = response.get("password_setup_url")
+    password_setup_required = response.get("password_setup_required") is True
+    login = response.get("login")
+
     lines = [
         first_line,
         "",
         "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
         "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
-        "Пароль в VK не отправляется. Вход по паролю в WEB будет подключён через безопасную установку пароля.",
         "WEB-кабинет: доступ для бота активен.",
         "Явная VK-привязка: через код из WEB-кабинета. "
         "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
     ]
+
+    if password_setup_required and isinstance(password_setup_url, str) and password_setup_url.strip():
+        lines.extend(
+            [
+                "",
+                "Чтобы входить в WEB-кабинет самостоятельно, задайте пароль по ссылке ниже.",
+                "Ссылка действует 60 минут.",
+                "Пароль не отправляйте в VK.",
+            ]
+        )
+        if isinstance(login, str) and login.strip():
+            lines.append(f"Логин: {login.strip()}")
+        lines.append(f"Задать пароль для WEB-кабинета: {password_setup_url.strip()}")
+    elif response.get("password_setup_required") is False:
+        lines.extend(["", "Пароль для WEB-кабинета уже установлен. Войти можно на сайте."])
+    else:
+        lines.extend(["", "Пароль в VK не отправляется. Вход по паролю в WEB будет подключён через безопасную установку пароля."])
+
     if city_retry_without_slug:
         lines.append("Город можно будет выбрать позже в личном кабинете.")
     return "\n".join(lines)
