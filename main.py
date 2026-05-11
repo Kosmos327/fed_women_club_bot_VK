@@ -225,12 +225,25 @@ def format_payment_request_message(payment: dict) -> str:
 
 
 def format_backend_error_message(exc: BackendApiError) -> str:
-    if exc.code == "no_subscription":
+    code = (exc.code or "").strip().lower()
+    status_code = exc.status_code
+
+    if code == "no_subscription":
         return NO_SUBSCRIPTION_TEXT
-    if exc.code == "payment_request_not_found":
+    if code == "payment_request_not_found":
         return PAYMENT_REQUEST_NOT_FOUND_TEXT
-    if exc.code == "discount_code_limit_reached":
+    if code == "discount_code_limit_reached":
         return PRIVILEGE_LIMIT_REACHED_TEXT
+    if code == "backend_unavailable":
+        return BACKEND_UNAVAILABLE_TEXT
+    if status_code in {401, 403} or code in {"auth", "forbidden", "unauthorized", "unauthenticated"}:
+        return "Не удалось подтвердить доступ к сервису. Попробуйте позже или откройте главное меню."
+    if status_code == 404 or code == "not_found":
+        return "Данные пока не найдены. Попробуйте обновить действие или откройте главное меню."
+    if status_code == 422 or code in {"validation", "validation_error"}:
+        return "Не удалось обработать запрос. Попробуйте открыть главное меню и повторить действие."
+    if (status_code is not None and status_code >= 500) or code in {"server_error", "internal_error"}:
+        return "На стороне сервиса произошла ошибка. Мы уже можем проверить её по логам. Попробуйте позже."
     return BACKEND_UNAVAILABLE_TEXT
 
 
@@ -359,10 +372,12 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
         "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
         "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
         "Пароль в VK не отправляется. Вход по паролю в WEB будет подключён через безопасную установку пароля.",
+        "WEB-кабинет: доступ для бота активен.",
+        "Явная VK-привязка: через код из WEB-кабинета. "
+        "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
     ]
     if city_retry_without_slug:
         lines.append("Город можно будет выбрать позже в личном кабинете.")
-    lines.append("WEB-привязка: активна")
     return "\n".join(lines)
 
 
@@ -504,7 +519,12 @@ def main() -> None:
                         category = payload.get("category")
                         partners = gateway.get_partners(category=None if category == "all" else category)
                         state["last_partners"] = partners
-                        send_message(vk_api, peer_id, PARTNERS_FOUND_TEXT, get_partners_keyboard(partners, category))
+                        message_text = (
+                            PARTNERS_FOUND_TEXT
+                            if partners
+                            else "Партнёры в этой категории пока не найдены. Попробуйте выбрать другую категорию или открыть главное меню."
+                        )
+                        send_message(vk_api, peer_id, message_text, get_partners_keyboard(partners, category))
                         continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)
                     if partner_id:
@@ -518,7 +538,12 @@ def main() -> None:
                         services = gateway.get_partner_services(partner_id)
                         state["last_partner_id"] = partner_id
                         state["last_services"] = services
-                        send_message(vk_api, peer_id, SERVICES_INTRO_TEXT, get_services_keyboard(partner_id, services))
+                        message_text = (
+                            SERVICES_INTRO_TEXT
+                            if services
+                            else "У этого партнёра пока нет доступных предложений. Попробуйте выбрать другого партнёра или открыть главное меню."
+                        )
+                        send_message(vk_api, peer_id, message_text, get_services_keyboard(partner_id, services))
                         continue
                     service_id = payload.get("service_id") if action == "service_selected" else parse_service_command(raw_text)
                     if service_id:

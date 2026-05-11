@@ -64,6 +64,30 @@ def test_no_subscription_text_is_adapted_to_privilege():
     assert "воспользоваться привилегией" in message
 
 
+def test_backend_error_mapping_keeps_known_business_errors():
+    assert main.format_backend_error_message(BackendApiError("no_subscription")) == texts.NO_SUBSCRIPTION_TEXT
+    assert main.format_backend_error_message(BackendApiError("payment_request_not_found")) == texts.PAYMENT_REQUEST_NOT_FOUND_TEXT
+    assert main.format_backend_error_message(BackendApiError("discount_code_limit_reached")) == texts.PRIVILEGE_LIMIT_REACHED_TEXT
+
+
+def test_backend_error_mapping_is_user_friendly_without_raw_status_or_code():
+    cases = [
+        (BackendApiError("backend_unavailable"), "Сервис временно недоступен"),
+        (BackendApiError("unauthorized", status_code=401), "Не удалось подтвердить доступ"),
+        (BackendApiError("forbidden", status_code=403), "Не удалось подтвердить доступ"),
+        (BackendApiError("not_found", status_code=404), "Данные пока не найдены"),
+        (BackendApiError("validation_error", status_code=422), "Не удалось обработать запрос"),
+        (BackendApiError("internal_error", status_code=500), "На стороне сервиса произошла ошибка"),
+    ]
+
+    for error, expected_text in cases:
+        message = main.format_backend_error_message(error)
+
+        assert expected_text in message
+        assert str(error.status_code) not in message
+        assert error.code not in message
+
+
 def test_legacy_terms_are_absent_from_user_texts():
     forbidden_terms = [
         "Авто" + "Клуб",
@@ -190,7 +214,10 @@ def test_join_success_new_user_text_contains_created_and_stores_token():
 
     assert "Личный кабинет создан" in message
     assert "Пароль в VK не отправляется" in message
-    assert "WEB-привязка: активна" in message
+    assert "WEB-привязка: активна" not in message
+    assert "WEB-кабинет: доступ для бота активен" in message
+    assert "Привязать КОД" in message
+    assert "код из WEB-кабинета" in message
     assert get_web_client_token(3001) == "client-token"
     assert get_user_state(3001)["web_client_user"]["email"] == "user@example.com"
     assert client.calls[0]["selected_city_slug"] == "novosibirsk"
@@ -203,6 +230,9 @@ def test_join_success_existing_user_text_contains_already_created():
     message = main.handle_join_club(client, 3002, "bot-token")
 
     assert "уже был создан" in message
+    assert "WEB-привязка: активна" not in message
+    assert "WEB-кабинет" in message
+    assert "Привязать КОД" in message
     assert get_web_client_token(3002) == "client-token"
 
 
