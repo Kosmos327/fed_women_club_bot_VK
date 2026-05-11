@@ -227,7 +227,7 @@ VK bot now includes a small runtime foundation for the WEB one-time link-code co
 - service calls: `POST /api/v1/bot/vk/exchange-link-code` and `POST /api/v1/bot/vk/token` via `WebApiClient`;
 - service auth: existing `BOT_API_TOKEN`, which must match the WEB `BOT_API_TOKEN` for `/api/v1/bot/vk/*` endpoints;
 - MVP storage: returned client token and user payload are kept only in in-memory `USER_STATE` as `web_client_token` / `web_client_user`;
-- status UX: `Статус привязки` and a passive `WEB-привязка: активна/не активна` line in `🎁 Мои привилегии`.
+- status UX: `Статус привязки` and a passive WEB binding status line in `🎁 Мои привилегии`.
 
 This foundation intentionally does **not** migrate catalog, verify, subscription, payment or existing `BackendGateway` runtime flows to WEB client-token calls yet. The bot still does not ask for or store WEB passwords.
 
