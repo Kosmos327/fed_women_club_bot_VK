@@ -34,8 +34,10 @@ from keyboards import (
     get_nav_keyboard,
     get_no_subscription_keyboard,
     get_partner_actions_keyboard,
+    get_password_setup_keyboard,
     get_partners_keyboard,
     get_payment_request_keyboard,
+    is_valid_open_link_url,
     get_service_actions_keyboard,
     get_service_search_results_keyboard,
     get_services_keyboard,
@@ -381,18 +383,17 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
         "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
     ]
 
-    if password_setup_required and isinstance(password_setup_url, str) and password_setup_url.strip():
+    if password_setup_required and is_valid_open_link_url(password_setup_url):
         lines.extend(
             [
                 "",
-                "Чтобы входить в WEB-кабинет самостоятельно, задайте пароль по ссылке ниже.",
+                "Чтобы входить в WEB-кабинет самостоятельно, нажмите кнопку ниже, чтобы задать пароль.",
                 "Ссылка действует 60 минут.",
                 "Пароль не отправляйте в VK.",
             ]
         )
         if isinstance(login, str) and login.strip():
             lines.append(f"Логин: {login.strip()}")
-        lines.append(f"Задать пароль для WEB-кабинета: {password_setup_url.strip()}")
     elif response.get("password_setup_required") is False:
         lines.extend(["", "Пароль для WEB-кабинета уже установлен. Войти можно на сайте."])
     else:
@@ -411,7 +412,11 @@ def map_join_club_error(error: WebApiError) -> str:
     return JOIN_CLUB_GENERIC_ERROR_TEXT
 
 
-def handle_join_club(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> str:
+def should_show_password_setup_button(response: dict) -> bool:
+    return response.get("password_setup_required") is True and is_valid_open_link_url(response.get("password_setup_url"))
+
+
+def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> tuple[str, str]:
     selected_city_slug = get_web_known_city_slug(selected_city)
     retried_without_city = False
     try:
@@ -427,16 +432,26 @@ def handle_join_club(web_client: WebApiClient, vk_user_id: int | str, bot_token:
                 payload = web_client.onboard_vk_client(vk_user_id, bot_token, selected_city_slug=None, source="vk")
                 retried_without_city = True
             except WebApiError as retry_exc:
-                return map_join_club_error(retry_exc)
+                return map_join_club_error(retry_exc), get_main_keyboard()
         else:
-            return map_join_club_error(exc)
+            return map_join_club_error(exc), get_main_keyboard()
     if not isinstance(payload, dict):
-        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
+        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
     token, user = extract_web_session_from_onboard_response(payload)
     if not token:
-        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT
+        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
     set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
-    return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city)
+    keyboard = (
+        get_password_setup_keyboard(payload.get("password_setup_url"))
+        if should_show_password_setup_button(payload)
+        else get_main_keyboard()
+    )
+    return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city), keyboard
+
+
+def handle_join_club(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> str:
+    message, _keyboard = handle_join_club_result(web_client, vk_user_id, bot_token, selected_city=selected_city)
+    return message
 
 
 def main() -> None:
@@ -499,12 +514,13 @@ def main() -> None:
                         send_message(vk_api, peer_id, format_web_link_status(is_linked), get_main_keyboard())
                         continue
                     if action == "join_club" or "присоединиться к клубу" in text:
-                        send_message(
-                            vk_api,
-                            peer_id,
-                            handle_join_club(web_client, from_id, config.bot_api_token, selected_city=state.get("selected_city")),
-                            get_main_keyboard(),
+                        message_text, keyboard = handle_join_club_result(
+                            web_client,
+                            from_id,
+                            config.bot_api_token,
+                            selected_city=state.get("selected_city"),
                         )
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "city_select" or text == normalize_text(BUTTON_CITY):
                         send_message(vk_api, peer_id, "Выберите город", get_city_keyboard())
@@ -584,7 +600,7 @@ def main() -> None:
                         continue
                     if action == "my_codes" or text == normalize_text(BUTTON_MY_CODES):
                         is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
-                        send_message(vk_api, peer_id, f"{MY_PRIVILEGES_FILTER_TEXT}\n\nWEB-привязка: {'активна' if is_linked else 'не активна'}", get_codes_filter_keyboard())
+                        send_message(vk_api, peer_id, f"{MY_PRIVILEGES_FILTER_TEXT}\n\nWEB-кабинет: {'доступ активен' if is_linked else 'доступ не активен'}", get_codes_filter_keyboard())
                         continue
                     if action == "codes_filter":
                         status = payload.get("status")

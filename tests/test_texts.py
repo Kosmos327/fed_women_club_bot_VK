@@ -1,4 +1,5 @@
 import inspect
+import json
 import sys
 import types
 
@@ -253,16 +254,16 @@ def test_join_success_with_password_setup_url_adds_safe_setup_instructions():
 
     message = main.handle_join_club(client, 3006, "bot-token")
 
-    assert "задайте пароль" in message
-    assert "Задать пароль для WEB-кабинета" in message
+    assert "задать пароль" in message
+    assert "нажмите кнопку ниже, чтобы задать пароль" in message
     assert "Ссылка действует 60 минут" in message
     assert "Пароль не отправляйте в VK" in message
     assert "Логин: user@example.com" in message
-    assert password_setup_url in message
+    assert password_setup_url not in message
     assert get_web_client_token(3006) == "client-token"
 
 
-def test_join_success_ignores_invalid_password_setup_url_without_breaking_session():
+def test_join_success_ignores_non_string_password_setup_url_without_breaking_session():
     reset_user_state(3007)
     client = JoinSuccessClient(
         payload={
@@ -301,6 +302,91 @@ def test_join_success_password_not_required_mentions_site_without_setup_link():
     assert "Задать пароль для WEB-кабинета" not in message
     assert "token=unused" not in message
     assert get_web_client_token(3008) == "client-token"
+
+
+def _keyboard_labels(keyboard_json: str) -> list[str]:
+    keyboard = json.loads(keyboard_json)
+    return [button["action"]["label"] for row in keyboard["buttons"] for button in row]
+
+
+def _keyboard_actions(keyboard_json: str) -> list[dict]:
+    keyboard = json.loads(keyboard_json)
+    return [button["action"] for row in keyboard["buttons"] for button in row]
+
+
+def test_join_success_with_password_setup_url_returns_url_button_keyboard():
+    reset_user_state(3010)
+    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": True,
+            "password_setup_required": True,
+            "password_setup_url": password_setup_url,
+        }
+    )
+
+    message, keyboard = main.handle_join_club_result(client, 3010, "bot-token")
+
+    actions = _keyboard_actions(keyboard)
+    assert "Задать пароль для WEB-кабинета" in _keyboard_labels(keyboard)
+    assert actions[0] == {"type": "open_link", "label": "Задать пароль для WEB-кабинета", "link": password_setup_url}
+    assert password_setup_url not in message
+    assert "password_setup_url" not in get_user_state(3010)
+
+
+def test_join_success_without_url_does_not_return_url_button():
+    reset_user_state(3011)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": True,
+            "password_setup_required": True,
+        }
+    )
+
+    _message, keyboard = main.handle_join_club_result(client, 3011, "bot-token")
+
+    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
+    assert _keyboard_labels(keyboard) == _keyboard_labels(keyboards.get_main_keyboard())
+
+
+def test_join_success_with_invalid_url_does_not_return_url_button():
+    reset_user_state(3012)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": True,
+            "password_setup_required": True,
+            "password_setup_url": "ftp://bloomclub.ru/password/setup?token=unused",
+        }
+    )
+
+    message, keyboard = main.handle_join_club_result(client, 3012, "bot-token")
+
+    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
+    assert "token=unused" not in message
+
+
+def test_link_code_flow_keyboard_remains_main_menu_without_url_button():
+    reset_user_state(3013)
+
+    _message = main.handle_vk_link_code(LinkSuccessClient(), 3013, "ABC12345", "bot-token")
+    keyboard = keyboards.get_main_keyboard()
+
+    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
+    assert _keyboard_labels(keyboard) == [
+        "💗 Присоединиться к клубу",
+        "💗 Подписка",
+        "✨ Партнёры и скидки",
+        "🎁 Мои привилегии",
+        "💳 Оплатить / Продлить",
+        "🌸 Выбрать город",
+        "❓ Помощь",
+    ]
 
 
 def test_join_401_maps_to_service_auth_ux():
