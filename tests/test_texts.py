@@ -3,6 +3,8 @@ import json
 import sys
 import types
 
+import pytest
+
 import keyboards
 import texts
 
@@ -498,4 +500,147 @@ def test_subscription_handler_web_api_error_returns_clear_text_not_raw_exception
 
     assert "Не удалось получить статус подписки" in message
     assert "boom" not in message
+    assert "server_error" not in message
+
+
+class CodesClient:
+    def __init__(self, verifications=None, token_payload=None, token_error=None, verifications_error=None):
+        self.verifications = verifications if verifications is not None else []
+        self.token_payload = token_payload
+        self.token_error = token_error
+        self.verifications_error = verifications_error
+        self.bound_token_calls = []
+        self.verification_calls = []
+
+    def get_vk_bound_token(self, vk_user_id, bot_token):
+        self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
+        if self.token_error:
+            raise self.token_error
+        return self.token_payload or {}
+
+    def get_client_verifications(self, token, status=None):
+        self.verification_calls.append({"token": token, "status": status})
+        if self.verifications_error:
+            raise self.verifications_error
+        return self.verifications
+
+
+class CodesGatewayShouldNotBeCalled:
+    def get_my_codes(self, vk_user_id, status=None):
+        raise AssertionError("legacy codes endpoint must not be called")
+
+
+def test_codes_filter_uses_web_api_when_token_present_not_legacy():
+    reset_user_state(5001)
+    get_user_state(5001)["web_client_token"] = "client-token"
+    client = CodesClient(verifications=[{"code": "WEB-1", "status": "active"}])
+
+    message = main.handle_my_codes_filter(
+        client,
+        5001,
+        "bot-token",
+        status="active",
+        gateway=CodesGatewayShouldNotBeCalled(),
+    )
+
+    assert "WEB-1" in message
+    assert "Активна" in message
+    assert client.bound_token_calls == []
+    assert client.verification_calls == [{"token": "client-token", "status": "active"}]
+
+
+def test_codes_filter_all_status_uses_web_api_without_status_query():
+    reset_user_state(5002)
+    get_user_state(5002)["web_client_token"] = "client-token"
+    client = CodesClient(verifications=[])
+
+    main.handle_my_codes_filter(client, 5002, "bot-token", status="all", gateway=CodesGatewayShouldNotBeCalled())
+
+    assert client.verification_calls == [{"token": "client-token", "status": None}]
+
+
+def test_active_web_verification_formats_supported_fields():
+    reset_user_state(5003)
+    get_user_state(5003)["web_client_token"] = "client-token"
+    client = CodesClient(
+        verifications=[
+            {
+                "code": "ABC-123",
+                "status": "active",
+                "created_at": "2026-05-01T10:00:00Z",
+                "expires_at": "2026-06-01T10:00:00Z",
+                "confirmed_at": "2026-05-03T10:00:00Z",
+                "partner": {"name": "Beauty Partner"},
+                "offer": {"title": "Скидка на уход"},
+            }
+        ]
+    )
+
+    message = main.handle_my_codes_filter(client, 5003, "bot-token", status="active")
+
+    assert "🎁 Код привилегии: ABC-123" in message
+    assert "Партнёр: Beauty Partner" in message
+    assert "Предложение: Скидка на уход" in message
+    assert "Статус: Активна" in message
+    assert "Действует до: 01.06.2026" in message
+    assert "Подтверждена: 03.05.2026" in message
+
+
+def test_empty_web_verifications_show_privileges_empty_text():
+    reset_user_state(5004)
+    get_user_state(5004)["web_client_token"] = "client-token"
+    client = CodesClient(verifications=[])
+
+    message = main.handle_my_codes_filter(client, 5004, "bot-token", status="active")
+
+    assert message == texts.MY_PRIVILEGES_EMPTY_TEXT
+    assert "Данные пока не найдены" not in message
+
+
+@pytest.mark.parametrize("wrapper_key", ["items", "verifications", "results"])
+def test_web_verification_response_wrappers_are_supported(wrapper_key):
+    reset_user_state(5005)
+    get_user_state(5005)["web_client_token"] = "client-token"
+    client = CodesClient(verifications={wrapper_key: [{"code": "WRAPPED", "status": "confirmed"}]})
+
+    message = main.handle_my_codes_filter(client, 5005, "bot-token", status="all")
+
+    assert "WRAPPED" in message
+    assert "Использована / Подтверждена" in message
+
+
+def test_codes_filter_without_web_token_returns_link_instruction_not_legacy():
+    reset_user_state(5006)
+    client = CodesClient(token_error=WebApiError("not_found", status_code=404))
+
+    message = main.handle_my_codes_filter(
+        client,
+        5006,
+        "bot-token",
+        status="active",
+        gateway=CodesGatewayShouldNotBeCalled(),
+    )
+
+    assert "WEB-кабинет" in message
+    assert "привяжите VK" in message
+    assert "💗 Присоединиться к клубу" in message
+    assert client.verification_calls == []
+
+
+def test_codes_filter_web_api_error_returns_clear_text_without_sensitive_leak():
+    reset_user_state(5007)
+    get_user_state(5007)["web_client_token"] = "client-token"
+    client = CodesClient(
+        verifications_error=WebApiError(
+            "server_error",
+            status_code=500,
+            detail="token client-token failed for code SECRET-CODE",
+        )
+    )
+
+    message = main.handle_my_codes_filter(client, 5007, "bot-token", status="active")
+
+    assert "Не удалось получить список привилегий" in message
+    assert "client-token" not in message
+    assert "SECRET-CODE" not in message
     assert "server_error" not in message
