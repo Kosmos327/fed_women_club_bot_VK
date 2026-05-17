@@ -123,7 +123,7 @@ class WebApiClient:
             "POST",
             "/bot/vk/exchange-link-code",
             token=bot_token,
-            json={"vk_user_id": str(vk_user_id), "code": code},
+            json={"vk_user_id": str(vk_user_id), "code": str(code).strip().upper()},
         )
 
     def get_vk_bound_token(self, vk_user_id: int | str, bot_token: str) -> Any:

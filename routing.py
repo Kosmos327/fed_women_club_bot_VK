@@ -26,10 +26,15 @@ def parse_code_command(text: str | None) -> int | None:
 def parse_link_code_command(text: str | None) -> str | None:
     if not text:
         return None
-    match = re.fullmatch(r"(?:привязать|link|код)\s+([A-Za-z0-9]{8})", text.strip(), flags=re.IGNORECASE)
+    match = re.fullmatch(r"(?:привязать|link)\s+(.+)", text.strip(), flags=re.IGNORECASE)
     if not match:
         return None
-    return match.group(1).strip().upper()
+    code = match.group(1).strip().upper()
+    return code or None
+
+
+def is_link_code_command(text: str | None) -> bool:
+    return bool(text and re.fullmatch(r"(?:привязать|link)(?:\s+.*)?", text.strip(), flags=re.IGNORECASE))
 
 
 def is_legacy_discount_command(text: str | None) -> bool:
