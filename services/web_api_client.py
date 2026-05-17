@@ -104,8 +104,12 @@ class WebApiClient:
             )
         return payload
 
+    def get_client_profile(self, token: str) -> dict:
+        payload = self.request("GET", "/clients/me", token=token)
+        return payload if isinstance(payload, dict) else {}
+
     def get_client_me(self, token: str) -> Any:
-        return self.request("GET", "/clients/me", token=token)
+        return self.get_client_profile(token)
 
     def get_client_subscription(self, token: str) -> dict:
         return self.request("GET", "/clients/me/subscription", token=token) or {}
@@ -156,7 +160,7 @@ class WebApiClient:
         city_slug: str | None = None,
         category_slug: str | None = None,
         q: str | None = None,
-    ) -> Any:
+    ) -> list[dict] | dict:
         params = {
             key: value
             for key, value in {

@@ -14,6 +14,7 @@ from vk_api.exceptions import ApiError
 from city_mapping import get_web_known_city_slug
 from config import load_config
 from diagnostics import format_debug_status, format_health_status
+from partner_categories import WEB_PARTNER_CATEGORIES, get_web_partner_category_label, get_web_partner_category_slug
 from keyboards import (
     BUTTON_CITY,
     BUTTON_HELP,
@@ -60,6 +61,10 @@ from texts import (
     MY_PRIVILEGES_FILTER_TEXT,
     MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT,
     MY_PRIVILEGES_WEB_UNAVAILABLE_TEXT,
+    PARTNERS_EMPTY_TEXT,
+    PARTNERS_UNKNOWN_CATEGORY_TEXT,
+    PARTNERS_WEB_LINK_REQUIRED_TEXT,
+    PARTNERS_WEB_UNAVAILABLE_TEXT,
     NO_SUBSCRIPTION_TEXT,
     PARTNERS_FOUND_TEXT,
     PARTNERS_INTRO_TEXT,
@@ -330,6 +335,198 @@ def handle_my_codes_filter(
         len(extract_web_verifications(payload)),
     )
     return format_web_verifications_message(payload)
+
+
+def extract_web_catalog_partners(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict):
+        raw_items = None
+        for key in ("items", "results", "partners"):
+            if isinstance(payload.get(key), list):
+                raw_items = payload.get(key)
+                break
+        if raw_items is None:
+            raw_items = []
+    else:
+        raw_items = []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def get_selected_city_slug_from_profile(profile: dict | None, state: dict | None = None) -> str | None:
+    profile = profile or {}
+    state = state or {}
+    for key in ("selected_city_slug", "city_slug"):
+        value = profile.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    selected_city = profile.get("selected_city")
+    if isinstance(selected_city, dict):
+        value = selected_city.get("slug")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return get_web_known_city_slug(state.get("selected_city"))
+
+
+def _truncate_text(value: object, limit: int = 180) -> str | None:
+    if not _is_filled(value):
+        return None
+    text = " ".join(str(value).strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _extract_first_offer(partner: dict) -> dict | None:
+    offers = partner.get("offers")
+    if isinstance(offers, list):
+        return next((offer for offer in offers if isinstance(offer, dict)), None)
+    if isinstance(offers, dict):
+        return offers
+    return None
+
+
+def _format_partner_benefit(partner: dict) -> str | None:
+    offer = _extract_first_offer(partner) or partner
+    for key in ("benefit_text", "discount_text", "title", "name"):
+        if _is_filled(offer.get(key)):
+            return str(offer.get(key)).strip()
+    if _is_filled(offer.get("discount_percent")):
+        return f"Скидка {format_discount_percent(offer.get('discount_percent'))}"
+    return None
+
+
+def format_web_partner_compact(partner: dict) -> str:
+    lines = [str(partner.get("name") or "Партнёр").strip()]
+    category = partner.get("category_title") or partner.get("category") or get_web_partner_category_label(partner.get("category_slug"))
+    if _is_filled(category):
+        lines.append(f"Категория: {category}")
+    address = partner.get("address") or partner.get("city_name")
+    if _is_filled(address):
+        lines.append(f"Адрес/город: {address}")
+    description = _truncate_text(partner.get("description"))
+    if description:
+        lines.extend(["", description])
+    if partner.get("is_verified") is True:
+        lines.append("✅ Проверенный партнёр")
+    benefit = _format_partner_benefit(partner)
+    if benefit:
+        lines.append(f"Выгода: {benefit}")
+    return "\n".join(lines)
+
+
+def format_web_partners_list(partners: list[dict]) -> str:
+    if not partners:
+        return PARTNERS_EMPTY_TEXT
+    return "\n\n".join(format_web_partner_compact(partner) for partner in partners[:10])
+
+
+def _cache_web_catalog_partners(state: dict, partners: list[dict], city_slug: str | None, category_slug: str | None) -> None:
+    partners_by_id = {}
+    for partner in partners:
+        partner_id = partner.get("id")
+        if partner_id is not None:
+            partners_by_id[str(partner_id)] = partner
+    state["web_catalog_partners_by_id"] = partners_by_id
+    state["web_catalog_city_slug"] = city_slug
+    state["web_catalog_category_slug"] = category_slug
+
+
+def handle_partners_start(web_client: WebApiClient, vk_user_id: int | str, bot_token: str) -> tuple[str, str]:
+    state = get_user_state(int(vk_user_id))
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    logger.info(
+        "Partners start requested source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s",
+        vk_user_id,
+        state.get("web_catalog_city_slug"),
+        None,
+        bool(token),
+    )
+    if not is_linked or not token:
+        return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+    try:
+        profile = web_client.get_client_profile(token)
+    except WebApiError as exc:
+        logger.warning(
+            "Partners profile WEB API error source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s code=%s http_status=%s",
+            vk_user_id,
+            None,
+            None,
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        return PARTNERS_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
+    city_slug = get_selected_city_slug_from_profile(profile, state)
+    state["web_client_profile"] = profile
+    state["web_catalog_city_slug"] = city_slug
+    state["categories"] = list(WEB_PARTNER_CATEGORIES)
+    return PARTNERS_INTRO_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
+
+
+def handle_category_selected(
+    web_client: WebApiClient,
+    vk_user_id: int | str,
+    bot_token: str,
+    category: str | None,
+    category_slug: str | None = None,
+    gateway: BackendGateway | None = None,
+) -> tuple[str, str]:
+    state = get_user_state(int(vk_user_id))
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    if is_linked and token:
+        requested_slug = category_slug if category_slug else None
+        if category == "all":
+            requested_slug = None
+        elif not requested_slug:
+            requested_slug = get_web_partner_category_slug(category)
+            if requested_slug is None:
+                logger.info(
+                    "Partners category unknown source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s",
+                    vk_user_id,
+                    state.get("web_catalog_city_slug"),
+                    category,
+                    True,
+                )
+                return PARTNERS_UNKNOWN_CATEGORY_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
+        city_slug = state.get("web_catalog_city_slug")
+        if not city_slug:
+            profile = state.get("web_client_profile") if isinstance(state.get("web_client_profile"), dict) else {}
+            city_slug = get_selected_city_slug_from_profile(profile, state)
+            state["web_catalog_city_slug"] = city_slug
+        logger.info(
+            "Partners category requested source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s",
+            vk_user_id,
+            city_slug,
+            requested_slug,
+            True,
+        )
+        try:
+            payload = web_client.get_client_catalog_partners(token, city_slug=city_slug, category_slug=requested_slug)
+        except WebApiError as exc:
+            logger.warning(
+                "Partners WEB API error source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s code=%s http_status=%s",
+                vk_user_id,
+                city_slug,
+                requested_slug,
+                True,
+                exc.code,
+                exc.status_code,
+            )
+            return PARTNERS_WEB_UNAVAILABLE_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
+        partners = extract_web_catalog_partners(payload)
+        _cache_web_catalog_partners(state, partners, city_slug, requested_slug)
+        state["last_partners"] = partners
+        return format_web_partners_list(partners), get_partners_keyboard(partners, category)
+
+    if gateway is None:
+        return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+    partners = gateway.get_partners(category=None if category == "all" else category)
+    state["last_partners"] = partners
+    message_text = PARTNERS_FOUND_TEXT if partners else PARTNERS_EMPTY_TEXT
+    return message_text, get_partners_keyboard(partners, category)
 
 
 def format_city_selected_message(city: str) -> str:
@@ -742,9 +939,8 @@ def main() -> None:
                         send_message(vk_api, peer_id, format_city_selected_message(city), get_city_selected_keyboard())
                         continue
                     if action == "partners" or text == normalize_text(BUTTON_PARTNERS):
-                        names = WOMEN_CATEGORIES
-                        state["categories"] = names
-                        send_message(vk_api, peer_id, PARTNERS_INTRO_TEXT, get_categories_keyboard(names))
+                        message_text, keyboard = handle_partners_start(web_client, from_id, config.bot_api_token)
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "service_search_start":
                         state["awaiting_service_search_query"] = True
@@ -765,20 +961,26 @@ def main() -> None:
                         continue
                     if action == "category_selected":
                         category = payload.get("category")
-                        partners = gateway.get_partners(category=None if category == "all" else category)
-                        state["last_partners"] = partners
-                        message_text = (
-                            PARTNERS_FOUND_TEXT
-                            if partners
-                            else "Партнёры в этой категории пока не найдены. Попробуйте выбрать другую категорию или открыть главное меню."
+                        category_slug = payload.get("category_slug")
+                        message_text, keyboard = handle_category_selected(
+                            web_client,
+                            from_id,
+                            config.bot_api_token,
+                            category=category,
+                            category_slug=category_slug,
+                            gateway=gateway,
                         )
-                        send_message(vk_api, peer_id, message_text, get_partners_keyboard(partners, category))
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)
                     if partner_id:
                         partner_id = int(partner_id)
-                        partner = gateway.get_partner(partner_id)
+                        cached_web_partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
                         state["last_partner_id"] = partner_id
+                        if isinstance(cached_web_partner, dict):
+                            send_message(vk_api, peer_id, format_web_partner_compact(cached_web_partner), get_partner_actions_keyboard(partner_id, has_contacts=True))
+                            continue
+                        partner = gateway.get_partner(partner_id)
                         send_message(vk_api, peer_id, format_partner_card(partner), get_partner_actions_keyboard(partner_id, has_contacts=True))
                         continue
                     if action == "partner_services":
