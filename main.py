@@ -71,6 +71,8 @@ from texts import (
     SERVICES_INTRO_TEXT,
     SUBSCRIPTION_ACTIVE_TEXT,
     SUBSCRIPTION_INACTIVE_TEXT,
+    SUBSCRIPTION_WEB_LINK_REQUIRED_TEXT,
+    SUBSCRIPTION_WEB_UNAVAILABLE_TEXT,
     VERIFY_PARTNER_NOT_FOUND_TEXT,
     VERIFY_PRIVILEGE_FAILED_TEXT,
     VK_LINK_CODE_INVALID_TEXT,
@@ -224,6 +226,96 @@ def format_payment_request_message(payment: dict) -> str:
         parts.append(instructions)
     parts.append("После оплаты нажмите «✅ Я оплатил» и отправьте скрин оплаты.")
     return "\n".join(parts)
+
+
+def _coerce_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "active"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "inactive", "expired"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
+def is_web_subscription_active(subscription: dict) -> bool:
+    for key in ("has_active_subscription", "is_active"):
+        active = _coerce_bool(subscription.get(key))
+        if active is not None:
+            return active
+    status = str(subscription.get("status") or "").strip().lower()
+    return status == "active"
+
+
+def get_web_subscription_ends_at(subscription: dict) -> str | None:
+    for key in ("ends_at", "expires_at", "paid_until"):
+        value = subscription.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def format_web_subscription_message(subscription: dict) -> str:
+    if is_web_subscription_active(subscription):
+        return SUBSCRIPTION_ACTIVE_TEXT.format(ends_at=format_user_date(get_web_subscription_ends_at(subscription)))
+    return SUBSCRIPTION_INACTIVE_TEXT
+
+
+def map_web_subscription_error_to_text(error: WebApiError) -> str:
+    if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
+        return SUBSCRIPTION_WEB_LINK_REQUIRED_TEXT
+    return SUBSCRIPTION_WEB_UNAVAILABLE_TEXT
+
+
+def handle_subscription_status(
+    web_client: WebApiClient,
+    vk_user_id: int | str,
+    bot_token: str,
+    gateway: BackendGateway | None = None,
+) -> str:
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    logger.info(
+        "Subscription status requested source=web_api vk_user_id=%s web_token_present=%s",
+        vk_user_id,
+        bool(token),
+    )
+    if not is_linked or not token:
+        logger.info(
+            "Subscription status unavailable source=web_api vk_user_id=%s web_token_present=%s reason=no_web_token",
+            vk_user_id,
+            bool(token),
+        )
+        return SUBSCRIPTION_WEB_LINK_REQUIRED_TEXT
+    try:
+        subscription = web_client.get_client_subscription(token)
+    except WebApiError as exc:
+        logger.warning(
+            "Subscription WEB API error source=web_api vk_user_id=%s web_token_present=%s code=%s status=%s",
+            vk_user_id,
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        return map_web_subscription_error_to_text(exc)
+    if not isinstance(subscription, dict):
+        logger.warning(
+            "Subscription WEB API returned unexpected payload source=web_api vk_user_id=%s web_token_present=%s",
+            vk_user_id,
+            True,
+        )
+        return SUBSCRIPTION_WEB_UNAVAILABLE_TEXT
+    logger.info(
+        "Subscription status loaded source=web_api vk_user_id=%s web_token_present=%s active=%s",
+        vk_user_id,
+        True,
+        is_web_subscription_active(subscription),
+    )
+    return format_web_subscription_message(subscription)
 
 
 def format_backend_error_message(exc: BackendApiError) -> str:
@@ -608,11 +700,7 @@ def main() -> None:
                         send_message(vk_api, peer_id, "\n\n".join(format_code_item(c) for c in codes) if codes else MY_PRIVILEGES_EMPTY_TEXT, get_codes_filter_keyboard())
                         continue
                     if action == "subscription" or text == normalize_text(BUTTON_SUBSCRIPTION):
-                        subscription = gateway.get_subscription(from_id)
-                        if subscription.get("has_active_subscription"):
-                            message_text = SUBSCRIPTION_ACTIVE_TEXT.format(ends_at=format_user_date(subscription.get("ends_at")))
-                        else:
-                            message_text = SUBSCRIPTION_INACTIVE_TEXT
+                        message_text = handle_subscription_status(web_client, from_id, config.bot_api_token, gateway=gateway)
                         send_message(vk_api, peer_id, message_text, get_main_keyboard())
                         continue
                     if action == "pay" or text in {"оплатить подписку", normalize_text(BUTTON_PAY)}:

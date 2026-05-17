@@ -107,6 +107,9 @@ class WebApiClient:
     def get_client_me(self, token: str) -> Any:
         return self.request("GET", "/clients/me", token=token)
 
+    def get_client_subscription(self, token: str) -> dict:
+        return self.request("GET", "/clients/me/subscription", token=token) or {}
+
     def exchange_vk_link_code(self, vk_user_id: int | str, code: str, bot_token: str) -> Any:
         return self.request(
             "POST",
