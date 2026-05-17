@@ -177,6 +177,18 @@ def test_get_vk_bound_token_builds_correct_request():
     assert call["json"] == {"vk_user_id": "123"}
 
 
+def test_get_client_subscription_builds_correct_authorized_request():
+    session = FakeSession(response=FakeResponse(payload={"has_active_subscription": True}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_subscription("client-token") == {"has_active_subscription": True}
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/subscription"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
 def test_onboard_vk_client_builds_correct_request_with_city_slug():
     session = FakeSession(response=FakeResponse(payload={"access_token": "client-token"}))
     client = WebApiClient("https://bloomclub.ru", session=session)

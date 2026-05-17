@@ -410,3 +410,92 @@ def test_join_city_404_retries_without_city_slug():
     assert client.calls == [{"selected_city_slug": "novosibirsk"}, {"selected_city_slug": None}]
     assert "Город можно будет выбрать позже" in message
     assert get_web_client_token(3005) == "client-token"
+
+class SubscriptionClient:
+    def __init__(self, subscription=None, token_payload=None, token_error=None, subscription_error=None):
+        self.subscription = subscription or {"has_active_subscription": True, "ends_at": "2026-06-01T00:00:00Z"}
+        self.token_payload = token_payload
+        self.token_error = token_error
+        self.subscription_error = subscription_error
+        self.bound_token_calls = []
+        self.subscription_calls = []
+
+    def get_vk_bound_token(self, vk_user_id, bot_token):
+        self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
+        if self.token_error:
+            raise self.token_error
+        return self.token_payload or {}
+
+    def get_client_subscription(self, token):
+        self.subscription_calls.append(token)
+        if self.subscription_error:
+            raise self.subscription_error
+        return self.subscription
+
+
+class SubscriptionGatewayShouldNotBeCalled:
+    def get_subscription(self, vk_user_id):
+        raise AssertionError("legacy subscription endpoint must not be called")
+
+
+def test_format_web_subscription_active_variants():
+    assert "Подписка активна до: 01.06.2026" in main.format_web_subscription_message(
+        {"has_active_subscription": True, "ends_at": "2026-06-01T00:00:00Z"}
+    )
+    assert "Подписка активна" in main.format_web_subscription_message({"is_active": True, "expires_at": "2026-07-02"})
+    assert "Подписка активна" in main.format_web_subscription_message({"status": "active", "paid_until": "2026-08-03"})
+
+
+def test_format_web_subscription_inactive_variants():
+    assert "Подписка не активна" in main.format_web_subscription_message({"has_active_subscription": False})
+    assert "Подписка не активна" in main.format_web_subscription_message({"is_active": False})
+    assert "Подписка не активна" in main.format_web_subscription_message({"status": "expired"})
+
+
+def test_subscription_handler_uses_web_api_when_web_token_present_not_legacy():
+    reset_user_state(4001)
+    get_user_state(4001)["web_client_token"] = "client-token"
+    client = SubscriptionClient(subscription={"has_active_subscription": True, "ends_at": "2026-06-01T00:00:00Z"})
+
+    message = main.handle_subscription_status(client, 4001, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
+
+    assert "Подписка активна до: 01.06.2026" in message
+    assert client.bound_token_calls == []
+    assert client.subscription_calls == ["client-token"]
+
+
+def test_subscription_handler_restores_web_token_then_uses_web_api_not_legacy():
+    reset_user_state(4002)
+    client = SubscriptionClient(
+        token_payload={"access_token": "restored-token", "user": {"id": 1}},
+        subscription={"status": "active", "paid_until": "2026-06-02T00:00:00Z"},
+    )
+
+    message = main.handle_subscription_status(client, 4002, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
+
+    assert "Подписка активна до: 02.06.2026" in message
+    assert get_web_client_token(4002) == "restored-token"
+    assert client.subscription_calls == ["restored-token"]
+
+
+def test_subscription_handler_without_web_token_returns_link_instruction_not_legacy():
+    reset_user_state(4003)
+    client = SubscriptionClient(token_error=WebApiError("not_found", status_code=404))
+
+    message = main.handle_subscription_status(client, 4003, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
+
+    assert "WEB-кабинет" in message
+    assert "Привязать КОД" in message
+    assert client.subscription_calls == []
+
+
+def test_subscription_handler_web_api_error_returns_clear_text_not_raw_exception():
+    reset_user_state(4004)
+    get_user_state(4004)["web_client_token"] = "client-token"
+    client = SubscriptionClient(subscription_error=WebApiError("server_error", status_code=500, detail="boom"))
+
+    message = main.handle_subscription_status(client, 4004, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
+
+    assert "Не удалось получить статус подписки" in message
+    assert "boom" not in message
+    assert "server_error" not in message
