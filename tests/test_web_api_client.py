@@ -155,7 +155,7 @@ def test_exchange_vk_link_code_builds_correct_request():
     session = FakeSession(response=FakeResponse(payload={"access_token": "client-token"}))
     client = WebApiClient("https://bloomclub.ru", session=session)
 
-    client.exchange_vk_link_code(123, "ABC12345", "bot-service-token")
+    client.exchange_vk_link_code(123, " abc12345 ", "bot-service-token")
 
     call = session.calls[0]
     assert call["method"] == "POST"

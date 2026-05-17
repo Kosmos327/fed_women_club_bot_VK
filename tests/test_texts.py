@@ -119,7 +119,11 @@ from state import get_user_state, get_web_client_token, reset_user_state
 
 
 class LinkSuccessClient:
+    def __init__(self):
+        self.calls = []
+
     def exchange_vk_link_code(self, vk_user_id, code, bot_token):
+        self.calls.append({"vk_user_id": vk_user_id, "code": code, "bot_token": bot_token})
         return {
             "access_token": "client-token",
             "user": {"email": "user@example.com", "role": "member"},
@@ -134,34 +138,89 @@ class LinkErrorClient:
         raise self.error
 
 
-def test_link_success_handler_stores_token_user_and_returns_success_text():
+def test_link_success_handler_stores_token_user_and_returns_success_text(caplog):
     reset_user_state(2001)
+    client = LinkSuccessClient()
 
-    message = main.handle_vk_link_code(LinkSuccessClient(), 2001, "ABC12345", "bot-token")
+    message = main.handle_vk_link_code(client, 2001, " abc12345 ", "bot-token")
 
+    assert client.calls == [{"vk_user_id": 2001, "code": "ABC12345", "bot_token": "bot-token"}]
     assert get_web_client_token(2001) == "client-token"
     assert get_user_state(2001)["web_client_user"] == {"email": "user@example.com", "role": "member"}
-    assert "VK привязан к личному кабинету" in message
-    assert "user@example.com" in message
-    assert "member" in message
+    assert main.restore_web_client_session(client, 2001, "bot-token") is True
+    assert "VK привязан к WEB-кабинету" in message
+    assert "подписка, партнёры и мои привилегии" in message
+    log_text = caplog.text
+    assert "client-token" not in log_text
+    assert "ABC12345" not in log_text
+    assert "abc12345" not in log_text
 
 
-def test_link_404_maps_to_code_not_found_ux():
-    message = main.handle_vk_link_code(LinkErrorClient(WebApiError("not_found", status_code=404)), 2002, "ABC12345", "bot-token")
+def test_link_missing_code_returns_instruction_without_web_call():
+    reset_user_state(2005)
+    client = LinkSuccessClient()
 
-    assert "Код привязки не найден" in message
+    message = main.handle_vk_link_code(client, 2005, "   ", "bot-token")
+
+    assert client.calls == []
+    assert "Привязать КОД" in message
+    assert get_web_client_token(2005) is None
 
 
-def test_link_401_maps_to_service_auth_ux():
-    message = main.handle_vk_link_code(LinkErrorClient(WebApiError("unauthenticated", status_code=401)), 2003, "ABC12345", "bot-token")
+@pytest.mark.parametrize(
+    "error",
+    [
+        WebApiError("not_found", status_code=404),
+        WebApiError("validation_error", status_code=422, detail="Link code expired"),
+        WebApiError("client_error", status_code=400, detail="Invalid link code"),
+    ],
+)
+def test_link_invalid_expired_not_found_maps_to_safe_ux(error):
+    message = main.handle_vk_link_code(LinkErrorClient(error), 2002, "ABC12345", "bot-token")
 
-    assert "Сервисная авторизация бота не настроена" in message
+    assert "Код не найден или срок действия истёк" in message
+    assert "ABC12345" not in message
+    assert "Link code" not in message
+
+
+def test_link_used_code_maps_to_distinct_ux():
+    message = main.handle_vk_link_code(
+        LinkErrorClient(WebApiError("validation_error", status_code=400, detail="Link code already used: ABC12345 token=secret")),
+        2006,
+        "ABC12345",
+        "bot-token",
+    )
+
+    assert "Этот код уже использован" in message
+    assert "ABC12345" not in message
+    assert "token=secret" not in message
+
+
+def test_link_conflict_maps_to_conflict_ux():
+    message = main.handle_vk_link_code(
+        LinkErrorClient(WebApiError("conflict", status_code=409, detail="vk already linked to another profile")),
+        2007,
+        "ABC12345",
+        "bot-token",
+    )
+
+    assert "Этот VK уже привязан к другому кабинету" in message
+    assert "another profile" not in message
+
+
+@pytest.mark.parametrize("error", [WebApiError("unauthenticated", status_code=401), WebApiError("forbidden", status_code=403)])
+def test_link_401_403_maps_to_service_auth_ux(error):
+    message = main.handle_vk_link_code(LinkErrorClient(error), 2003, "ABC12345", "bot-token")
+
+    assert "Не удалось привязать VK к WEB-кабинету" in message
+    assert "401" not in message
+    assert "403" not in message
 
 
 def test_link_web_unavailable_maps_to_unavailable_ux():
     message = main.handle_vk_link_code(LinkErrorClient(WebApiError("web_unavailable")), 2004, "ABC12345", "bot-token")
 
-    assert "WEB-сервис временно недоступен" in message
+    assert "WEB-кабинет временно недоступен" in message
 
 
 class JoinSuccessClient:

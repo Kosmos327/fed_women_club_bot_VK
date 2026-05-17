@@ -47,7 +47,7 @@ from keyboards import (
     get_verify_error_keyboard,
     get_verify_success_keyboard,
 )
-from routing import parse_code_command, parse_link_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
+from routing import is_link_code_command, parse_code_command, parse_link_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
 from services.backend_gateway import BackendApiError, BackendGateway
 from services.web_api_client import WebApiClient, WebApiError
 from state import USER_STATE, clear_user_flow_state, get_user_state, get_web_client_token, set_web_client_session
@@ -89,6 +89,9 @@ from texts import (
     VERIFY_PRIVILEGE_FAILED_TEXT,
     VK_LINK_CODE_INVALID_TEXT,
     VK_LINK_CODE_NOT_FOUND_TEXT,
+    VK_LINK_CODE_USED_TEXT,
+    VK_LINK_CONFLICT_TEXT,
+    VK_LINK_INSTRUCTION_TEXT,
     VK_LINK_SERVICE_AUTH_ERROR_TEXT,
     VK_LINK_STATUS_ACTIVE_TEXT,
     VK_LINK_STATUS_INACTIVE_TEXT,
@@ -1024,41 +1027,103 @@ def _extract_web_user(payload: dict) -> dict:
     return {}
 
 
-def format_link_success(user: dict | None) -> str:
-    user = user or {}
-    lines = ["VK привязан к личному кабинету"]
-    contact = user.get("email") or user.get("phone")
-    if contact:
-        lines.append(f"Контакт: {contact}")
-    role = user.get("role")
-    if role:
-        lines.append(f"Роль: {role}")
-    lines.extend(["", "Теперь можно использовать WEB-привилегии в боте."])
-    return "\n".join(lines)
+def format_link_success(user: dict | None = None) -> str:
+    return (
+        "VK привязан к WEB-кабинету. Теперь доступны подписка, партнёры и мои привилегии.\n\n"
+        "Откройте главное меню или нажмите нужную кнопку ниже."
+    )
+
+
+def _normalize_error_detail(detail: str | None) -> str:
+    return (detail or "").strip().lower()
 
 
 def map_web_api_error_to_link_text(error: WebApiError) -> str:
-    if error.code == "unauthenticated" or error.status_code == 401:
-        return VK_LINK_SERVICE_AUTH_ERROR_TEXT
-    if error.code == "not_found" or error.status_code == 404:
+    detail = _normalize_error_detail(error.detail)
+    if "link code already used" in detail or "already used" in detail:
+        return VK_LINK_CODE_USED_TEXT
+    if any(marker in detail for marker in ("expired", "invalid", "not found", "not_found")) or error.code == "not_found" or error.status_code == 404:
         return VK_LINK_CODE_NOT_FOUND_TEXT
+    if any(marker in detail for marker in ("conflict", "already linked", "another profile", "vk already linked")) or error.code == "conflict" or error.status_code == 409:
+        return VK_LINK_CONFLICT_TEXT
+    if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
+        return VK_LINK_SERVICE_AUTH_ERROR_TEXT
     if error.code in {"client_error", "validation_error"} or error.status_code in {400, 422}:
         return VK_LINK_CODE_INVALID_TEXT
     return VK_LINK_WEB_UNAVAILABLE_TEXT
 
 
 def handle_vk_link_code(web_client: WebApiClient, vk_user_id: int | str, code: str, bot_token: str) -> str:
+    normalized_code = str(code or "").strip().upper()
+    if not normalized_code:
+        logger.info(
+            "vk_link_code_exchange",
+            extra={
+                "vk_user_id": vk_user_id,
+                "action": "vk_link_code_exchange",
+                "result": "error",
+                "error_code": "missing_code",
+                "status": None,
+                "token_present": False,
+            },
+        )
+        return VK_LINK_INSTRUCTION_TEXT
     try:
-        payload = web_client.exchange_vk_link_code(vk_user_id, code, bot_token)
+        payload = web_client.exchange_vk_link_code(vk_user_id, normalized_code, bot_token)
     except WebApiError as exc:
+        logger.info(
+            "vk_link_code_exchange",
+            extra={
+                "vk_user_id": vk_user_id,
+                "action": "vk_link_code_exchange",
+                "result": "error",
+                "error_code": exc.code,
+                "status": exc.status_code,
+                "token_present": False,
+            },
+        )
         return map_web_api_error_to_link_text(exc)
     if not isinstance(payload, dict):
+        logger.info(
+            "vk_link_code_exchange",
+            extra={
+                "vk_user_id": vk_user_id,
+                "action": "vk_link_code_exchange",
+                "result": "error",
+                "error_code": "invalid_payload",
+                "status": None,
+                "token_present": False,
+            },
+        )
         return VK_LINK_WEB_UNAVAILABLE_TEXT
     token = _extract_web_token(payload)
+    token_present = bool(token)
     if not token:
+        logger.info(
+            "vk_link_code_exchange",
+            extra={
+                "vk_user_id": vk_user_id,
+                "action": "vk_link_code_exchange",
+                "result": "error",
+                "error_code": "missing_token",
+                "status": None,
+                "token_present": token_present,
+            },
+        )
         return VK_LINK_WEB_UNAVAILABLE_TEXT
     user = _extract_web_user(payload)
     set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
+    logger.info(
+        "vk_link_code_exchange",
+        extra={
+            "vk_user_id": vk_user_id,
+            "action": "vk_link_code_exchange",
+            "result": "success",
+            "error_code": None,
+            "status": None,
+            "token_present": token_present,
+        },
+    )
     return format_link_success(user)
 
 
@@ -1236,6 +1301,9 @@ def main() -> None:
                     link_code = parse_link_code_command(raw_text)
                     if link_code:
                         send_message(vk_api, peer_id, handle_vk_link_code(web_client, from_id, link_code, config.bot_api_token), get_main_keyboard())
+                        continue
+                    if is_link_code_command(raw_text):
+                        send_message(vk_api, peer_id, handle_vk_link_code(web_client, from_id, "", config.bot_api_token), get_main_keyboard())
                         continue
                     if text == "статус привязки":
                         is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
