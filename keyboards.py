@@ -149,6 +149,32 @@ def get_partner_actions_keyboard(partner_id: int, has_contacts: bool = False) ->
     return _keyboard(rows)
 
 
+def get_web_partner_actions_keyboard(partner_id: int) -> str:
+    return _keyboard(
+        [
+            [_button("Получить привилегию", "web_get_privilege", "positive", partner_id=partner_id)],
+            [_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")],
+        ]
+    )
+
+
+def get_web_offers_keyboard(partner_id: int, offers: list[dict]) -> str:
+    rows = [
+        [
+            _button(
+                str(offer.get("title") or offer.get("name") or f"Предложение {offer.get('id')}"),
+                "web_offer_selected",
+                "primary",
+                partner_id=partner_id,
+                offer_id=offer.get("id"),
+            )
+        ]
+        for offer in offers
+        if offer.get("id") is not None
+    ]
+    rows.append([_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")])
+    return _keyboard(rows)
+
 def get_services_keyboard(partner_id: int, services: list[dict]) -> str:
     rows = [
         [_button(str(service.get("title") or f"Предложение {service.get('id')}"), "service_selected", service_id=service.get("id"), partner_id=partner_id)]

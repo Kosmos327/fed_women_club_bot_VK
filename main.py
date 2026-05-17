@@ -38,6 +38,8 @@ from keyboards import (
     get_password_setup_keyboard,
     get_partners_keyboard,
     get_payment_request_keyboard,
+    get_web_offers_keyboard,
+    get_web_partner_actions_keyboard,
     is_valid_open_link_url,
     get_service_actions_keyboard,
     get_service_search_results_keyboard,
@@ -430,6 +432,139 @@ def _cache_web_catalog_partners(state: dict, partners: list[dict], city_slug: st
     state["web_catalog_partners_by_id"] = partners_by_id
     state["web_catalog_city_slug"] = city_slug
     state["web_catalog_category_slug"] = category_slug
+
+
+def extract_web_partner_offers(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict):
+        raw_items = None
+        for key in ("items", "offers", "results"):
+            if isinstance(payload.get(key), list):
+                raw_items = payload.get(key)
+                break
+        if raw_items is None:
+            raw_items = []
+    else:
+        raw_items = []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _cache_web_partner_offers(state: dict, partner_id: int, offers: list[dict]) -> None:
+    offers_by_partner_id = state.setdefault("web_partner_offers_by_partner_id", {})
+    offers_by_id = state.setdefault("web_partner_offers_by_id", {})
+    offers_by_partner_id[str(partner_id)] = offers
+    for offer in offers:
+        offer_id = offer.get("id")
+        if offer_id is not None:
+            offers_by_id[str(offer_id)] = {**offer, "partner_id": partner_id}
+
+
+def extract_web_verification(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    for key in ("verification", "session", "item"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return payload
+
+
+def format_web_created_verification_message(payload: object, partner: dict | None = None, offer: dict | None = None) -> str:
+    verification = extract_web_verification(payload)
+    code_item = map_web_verification_to_code_item(verification)
+    partner = partner or {}
+    offer = offer or {}
+    if not _is_filled(code_item.get("partner_name")) and _is_filled(partner.get("name")):
+        code_item["partner_name"] = partner.get("name")
+    if not _is_filled(code_item.get("service_title")) and _is_filled(offer.get("title") or offer.get("name")):
+        code_item["service_title"] = offer.get("title") or offer.get("name")
+    return (
+        f"{format_code_item(code_item)}\n\n"
+        "Покажите этот код партнёру перед оплатой/получением услуги."
+    )
+
+
+def _is_no_subscription_error(error: WebApiError) -> bool:
+    detail = (error.detail or "").strip().lower()
+    return error.code == "no_subscription" or detail == "no_subscription" or error.status_code == 403
+
+
+def map_web_partner_privilege_error_to_text(error: WebApiError) -> str:
+    if _is_no_subscription_error(error):
+        return "Для получения привилегии нужна активная подписка."
+    if error.code == "not_found" or error.status_code == 404:
+        return "Партнёр или предложение недоступны."
+    if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
+        return PARTNERS_WEB_LINK_REQUIRED_TEXT
+    return "Не удалось получить привилегию. Попробуйте позже или откройте главное меню."
+
+
+def handle_web_partner_selected(
+    web_client: WebApiClient,
+    vk_user_id: int | str,
+    bot_token: str,
+    partner_id: int,
+) -> tuple[str, str]:
+    state = get_user_state(int(vk_user_id))
+    partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    if not is_linked or not token:
+        return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+    try:
+        payload = web_client.get_client_partner_offers(token, partner_id)
+    except WebApiError as exc:
+        logger.warning(
+            "Partner offers WEB API error source=web_api vk_user_id=%s partner_id=%s token_present=%s code=%s http_status=%s",
+            vk_user_id,
+            partner_id,
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        text = map_web_partner_privilege_error_to_text(exc)
+        keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
+        return text, keyboard
+    offers = extract_web_partner_offers(payload)
+    _cache_web_partner_offers(state, partner_id, offers)
+    state["last_partner_id"] = partner_id
+    detail = format_web_partner_compact(partner) if isinstance(partner, dict) else f"Партнёр {partner_id}"
+    if offers:
+        return f"{detail}\n\nВыберите предложение:", get_web_offers_keyboard(partner_id, offers)
+    return f"{detail}\n\nУ партнёра пока нет активных предложений.", get_web_partner_actions_keyboard(partner_id)
+
+
+def handle_web_offer_selected(
+    web_client: WebApiClient,
+    vk_user_id: int | str,
+    bot_token: str,
+    partner_id: int,
+    offer_id: int | None = None,
+) -> tuple[str, str]:
+    state = get_user_state(int(vk_user_id))
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    if not is_linked or not token:
+        return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+    try:
+        payload = web_client.create_client_partner_verification(token, partner_id, offer_id)
+    except WebApiError as exc:
+        logger.warning(
+            "Partner verification WEB API error source=web_api vk_user_id=%s partner_id=%s offer_id=%s token_present=%s code=%s http_status=%s",
+            vk_user_id,
+            partner_id,
+            offer_id,
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        text = map_web_partner_privilege_error_to_text(exc)
+        keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
+        return text, keyboard
+    partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
+    offer = (state.get("web_partner_offers_by_id") or {}).get(str(offer_id)) if offer_id is not None else None
+    return format_web_created_verification_message(payload, partner=partner, offer=offer), get_verify_success_keyboard()
 
 
 def handle_partners_start(web_client: WebApiClient, vk_user_id: int | str, bot_token: str) -> tuple[str, str]:
@@ -972,13 +1107,25 @@ def main() -> None:
                         )
                         send_message(vk_api, peer_id, message_text, keyboard)
                         continue
+                    if action == "web_offer_selected":
+                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
+                        offer_id = int(payload.get("offer_id")) if payload.get("offer_id") is not None else None
+                        message_text, keyboard = handle_web_offer_selected(web_client, from_id, config.bot_api_token, partner_id, offer_id)
+                        send_message(vk_api, peer_id, message_text, keyboard)
+                        continue
+                    if action == "web_get_privilege":
+                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
+                        message_text, keyboard = handle_web_offer_selected(web_client, from_id, config.bot_api_token, partner_id, None)
+                        send_message(vk_api, peer_id, message_text, keyboard)
+                        continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)
                     if partner_id:
                         partner_id = int(partner_id)
                         cached_web_partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
                         state["last_partner_id"] = partner_id
                         if isinstance(cached_web_partner, dict):
-                            send_message(vk_api, peer_id, format_web_partner_compact(cached_web_partner), get_partner_actions_keyboard(partner_id, has_contacts=True))
+                            message_text, keyboard = handle_web_partner_selected(web_client, from_id, config.bot_api_token, partner_id)
+                            send_message(vk_api, peer_id, message_text, keyboard)
                             continue
                         partner = gateway.get_partner(partner_id)
                         send_message(vk_api, peer_id, format_partner_card(partner), get_partner_actions_keyboard(partner_id, has_contacts=True))

@@ -786,3 +786,147 @@ def test_unknown_category_slug_does_not_crash_or_call_catalog():
 
     assert "Не удалось определить категорию" in message
     assert client.catalog_calls == []
+
+
+class WebPartnerFlowClient:
+    def __init__(self, token_payload=None, offers=None, verification=None, token_error=None, offers_error=None, verification_error=None):
+        self.token_payload = token_payload
+        self.offers = offers if offers is not None else []
+        self.verification = verification if verification is not None else {"code": "WEB-CODE", "status": "active"}
+        self.token_error = token_error
+        self.offers_error = offers_error
+        self.verification_error = verification_error
+        self.bound_token_calls = []
+        self.offers_calls = []
+        self.verification_calls = []
+
+    def get_vk_bound_token(self, vk_user_id, bot_token):
+        self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
+        if self.token_error:
+            raise self.token_error
+        return self.token_payload or {}
+
+    def get_client_partner_offers(self, token, partner_id):
+        self.offers_calls.append({"token": token, "partner_id": partner_id})
+        if self.offers_error:
+            raise self.offers_error
+        return self.offers
+
+    def create_client_partner_verification(self, token, partner_id, offer_id=None):
+        self.verification_calls.append({"token": token, "partner_id": partner_id, "offer_id": offer_id})
+        if self.verification_error:
+            raise self.verification_error
+        return self.verification
+
+
+class LegacyServicesGatewayShouldNotBeCalled:
+    def get_partner_services(self, partner_id):
+        raise AssertionError("legacy services endpoint must not be called")
+
+    def request_discount_code(self, vk_user_id, partner_id, service_id):
+        raise AssertionError("legacy discount code endpoint must not be called")
+
+
+def test_web_partner_selected_loads_offers_and_caches_without_legacy_services():
+    reset_user_state(7001)
+    state = get_user_state(7001)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    client = WebPartnerFlowClient(offers={"offers": [{"id": 5, "title": "Скидка на уход"}]})
+
+    message, keyboard_json = main.handle_web_partner_selected(client, 7001, "bot-token", 11)
+
+    assert "Beauty Partner" in message
+    assert "Выберите предложение" in message
+    assert client.offers_calls == [{"token": "client-token", "partner_id": 11}]
+    assert get_user_state(7001)["web_partner_offers_by_partner_id"]["11"][0]["title"] == "Скидка на уход"
+    payloads = [json.loads(button["action"]["payload"]) for row in json.loads(keyboard_json)["buttons"] for button in row]
+    assert {"action": "web_offer_selected", "partner_id": 11, "offer_id": 5} in payloads
+
+
+def test_web_partner_offer_response_wrappers_are_supported():
+    for payload in ([{"id": 1}], {"items": [{"id": 2}]}, {"offers": [{"id": 3}]}, {"results": [{"id": 4}]}):
+        assert len(main.extract_web_partner_offers(payload)) == 1
+
+
+def test_web_offer_selected_calls_verify_endpoint_and_formats_code():
+    reset_user_state(7002)
+    state = get_user_state(7002)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {"5": {"id": 5, "partner_id": 11, "title": "Скидка на уход"}}
+    client = WebPartnerFlowClient(verification={"code": "ABC-777", "status": "active", "expires_at": "2026-06-01T10:00:00Z"})
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7002, "bot-token", 11, 5)
+
+    assert client.verification_calls == [{"token": "client-token", "partner_id": 11, "offer_id": 5}]
+    assert "🎁 Код привилегии: ABC-777" in message
+    assert "Партнёр: Beauty Partner" in message
+    assert "Предложение: Скидка на уход" in message
+    assert "Действует до: 01.06.2026" in message
+    assert "Покажите этот код партнёру" in message
+
+
+@pytest.mark.parametrize("wrapper_key", ["verification", "session", "item"])
+def test_web_created_verification_wrappers_are_supported(wrapper_key):
+    message = main.format_web_created_verification_message({wrapper_key: {"code": "WRAP-1", "partner_name": "Partner", "offer_title": "Offer"}})
+
+    assert "WRAP-1" in message
+    assert "Partner" in message
+    assert "Offer" in message
+
+
+def test_web_offer_without_token_returns_link_required_text():
+    reset_user_state(7003)
+    client = WebPartnerFlowClient(token_error=WebApiError("not_found", status_code=404))
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7003, "bot-token", 11, 5)
+
+    assert "WEB-кабинет" in message
+    assert "💗 Присоединиться к клубу" in message
+    assert client.verification_calls == []
+
+
+def test_web_verify_no_subscription_returns_pay_instruction():
+    reset_user_state(7004)
+    get_user_state(7004)["web_client_token"] = "client-token"
+    client = WebPartnerFlowClient(verification_error=WebApiError("forbidden", status_code=403, detail="no_subscription"))
+
+    message, keyboard_json = main.handle_web_offer_selected(client, 7004, "bot-token", 11, 5)
+
+    assert "Для получения привилегии нужна активная подписка" in message
+    assert "Оплатить / Продлить" in keyboard_json
+
+
+def test_web_verify_404_returns_unavailable_text():
+    reset_user_state(7005)
+    get_user_state(7005)["web_client_token"] = "client-token"
+    client = WebPartnerFlowClient(verification_error=WebApiError("not_found", status_code=404))
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7005, "bot-token", 11, 5)
+
+    assert message == "Партнёр или предложение недоступны."
+
+
+def test_web_verify_safe_error_text_does_not_leak_exception_token_or_code():
+    reset_user_state(7006)
+    get_user_state(7006)["web_client_token"] = "client-token"
+    client = WebPartnerFlowClient(verification_error=WebApiError("server_error", status_code=500, detail="token client-token code SECRET-CODE"))
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7006, "bot-token", 11, 5)
+
+    assert "Не удалось получить привилегию" in message
+    assert "client-token" not in message
+    assert "SECRET-CODE" not in message
+    assert "server_error" not in message
+
+
+def test_web_get_privilege_without_offer_calls_verify_with_empty_offer_id():
+    reset_user_state(7007)
+    get_user_state(7007)["web_client_token"] = "client-token"
+    client = WebPartnerFlowClient(verification={"code": "NO-OFFER", "status": "active"})
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7007, "bot-token", 11, None)
+
+    assert client.verification_calls == [{"token": "client-token", "partner_id": 11, "offer_id": None}]
+    assert "NO-OFFER" in message

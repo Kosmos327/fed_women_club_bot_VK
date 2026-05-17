@@ -293,3 +293,38 @@ def test_get_client_catalog_partners_omits_empty_filters():
     client.get_client_catalog_partners("client-token")
 
     assert session.calls[0]["params"] is None
+
+
+def test_get_client_partner_offers_builds_authorized_request():
+    payload = {"offers": [{"id": 5, "title": "Discount"}]}
+    session = FakeSession(response=FakeResponse(payload=payload))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_partner_offers("client-token", 11) == payload
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/partners/11/offers"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_create_client_partner_verification_posts_offer_payload():
+    session = FakeSession(response=FakeResponse(payload={"code": "WEB-CODE"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.create_client_partner_verification("client-token", 11, offer_id=5) == {"code": "WEB-CODE"}
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/partners/11/verify"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["json"] == {"offer_id": 5}
+
+
+def test_create_client_partner_verification_without_offer_uses_empty_payload():
+    session = FakeSession(response=FakeResponse(payload={"code": "WEB-CODE"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.create_client_partner_verification("client-token", 11)
+
+    assert session.calls[0]["json"] == {}
