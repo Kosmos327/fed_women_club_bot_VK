@@ -2,6 +2,8 @@ import json
 from typing import Iterable
 from urllib.parse import urlparse
 
+from partner_categories import WebPartnerCategory
+
 BUTTON_SUBSCRIPTION = "💗 Подписка"
 BUTTON_JOIN_CLUB = "💗 Присоединиться к клубу"
 BUTTON_PARTNERS = "✨ Партнёры и скидки"
@@ -109,10 +111,22 @@ def get_city_selected_keyboard() -> str:
     )
 
 
-def get_categories_keyboard(categories: list[str] | None = None) -> str:
+def _category_label_and_slug(category: str | dict | WebPartnerCategory) -> tuple[str, str | None]:
+    if isinstance(category, WebPartnerCategory):
+        return category.label, category.slug
+    if isinstance(category, dict):
+        label = str(category.get("label") or category.get("title") or category.get("name") or "Категория")
+        slug = category.get("slug") or category.get("category_slug")
+        return label, str(slug) if slug else None
+    return str(category), None
+
+
+def get_categories_keyboard(categories: list[str | dict | WebPartnerCategory] | None = None) -> str:
     category_names = categories or WOMEN_CATEGORIES
-    rows = [[_button("Все категории", "category_selected", "primary", category="all")]]
-    rows.extend([[_button(name, "category_selected", category=name)] for name in category_names])
+    rows = [[_button("Все категории", "category_selected", "primary", category="all", category_slug=None)]]
+    for category in category_names:
+        label, slug = _category_label_and_slug(category)
+        rows.append([_button(label, "category_selected", category=label, category_slug=slug)])
     rows.append([_button("Найти предложение", "service_search_start", "primary")])
     rows.append([_button(BUTTON_MAIN_MENU, "main_menu")])
     return _keyboard(rows)
@@ -123,7 +137,7 @@ def get_partners_keyboard(partners: list[dict], category: str | None = None) -> 
         [_button(str(partner.get("name") or f"Партнёр {partner.get('id')}"), "partner_selected", partner_id=partner.get("id"))]
         for partner in partners
     ]
-    rows.append([_button("Назад", "back"), _button(BUTTON_MAIN_MENU, "main_menu")])
+    rows.append([_button("Назад к категориям", "partners"), _button(BUTTON_MAIN_MENU, "main_menu")])
     return _keyboard(rows)
 
 

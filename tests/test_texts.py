@@ -644,3 +644,145 @@ def test_codes_filter_web_api_error_returns_clear_text_without_sensitive_leak():
     assert "client-token" not in message
     assert "SECRET-CODE" not in message
     assert "server_error" not in message
+
+
+class PartnersClient:
+    def __init__(self, profile=None, partners=None, token_payload=None, token_error=None, profile_error=None, partners_error=None):
+        self.profile = profile if profile is not None else {}
+        self.partners = partners if partners is not None else []
+        self.token_payload = token_payload
+        self.token_error = token_error
+        self.profile_error = profile_error
+        self.partners_error = partners_error
+        self.bound_token_calls = []
+        self.profile_calls = []
+        self.catalog_calls = []
+
+    def get_vk_bound_token(self, vk_user_id, bot_token):
+        self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
+        if self.token_error:
+            raise self.token_error
+        return self.token_payload or {}
+
+    def get_client_profile(self, token):
+        self.profile_calls.append(token)
+        if self.profile_error:
+            raise self.profile_error
+        return self.profile
+
+    def get_client_catalog_partners(self, token, city_slug=None, category_slug=None, q=None):
+        self.catalog_calls.append({"token": token, "city_slug": city_slug, "category_slug": category_slug, "q": q})
+        if self.partners_error:
+            raise self.partners_error
+        return self.partners
+
+
+class PartnersGatewayShouldNotBeCalled:
+    def get_partners(self, category=None):
+        raise AssertionError("legacy partners endpoint must not be called")
+
+
+def test_selected_city_slug_prefers_profile_top_level_nested_then_state_fallback():
+    assert main.get_selected_city_slug_from_profile({"selected_city_slug": "novosibirsk"}, {"selected_city": "Череповец"}) == "novosibirsk"
+    assert main.get_selected_city_slug_from_profile({"selected_city": {"slug": "cherepovets"}}, {"selected_city": "Новосибирск"}) == "cherepovets"
+    assert main.get_selected_city_slug_from_profile({"city_slug": "novosibirsk"}, {"selected_city": "Череповец"}) == "novosibirsk"
+    assert main.get_selected_city_slug_from_profile({}, {"selected_city": "Череповец"}) == "cherepovets"
+
+
+def test_partners_start_restores_web_token_loads_profile_and_category_payload_has_slug():
+    reset_user_state(6001)
+    get_user_state(6001)["selected_city"] = "Новосибирск"
+    client = PartnersClient(token_payload={"access_token": "restored-token"}, profile={"selected_city_slug": "cherepovets"})
+
+    message, keyboard_json = main.handle_partners_start(client, 6001, "bot-token")
+
+    assert message == texts.PARTNERS_INTRO_TEXT
+    assert get_user_state(6001)["web_catalog_city_slug"] == "cherepovets"
+    assert client.profile_calls == ["restored-token"]
+    actions = [button["action"] for button in json.loads(keyboard_json)["buttons"][1:3] for button in button]
+    payloads = [json.loads(action["payload"]) for action in actions]
+    assert any(payload["category"] == "Красота" and payload["category_slug"] == "beauty" for payload in payloads)
+
+
+def test_partners_start_without_web_token_returns_link_instruction():
+    reset_user_state(6002)
+    client = PartnersClient(token_error=WebApiError("not_found", status_code=404))
+
+    message, _keyboard = main.handle_partners_start(client, 6002, "bot-token")
+
+    assert "WEB-кабинет" in message
+    assert "💗 Присоединиться к клубу" in message
+    assert client.profile_calls == []
+
+
+def test_category_selected_with_web_token_uses_web_api_not_legacy_and_caches_partners():
+    reset_user_state(6003)
+    state = get_user_state(6003)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_city_slug"] = "novosibirsk"
+    client = PartnersClient(partners=[{"id": 11, "name": "Beauty Partner", "category_title": "Красота", "city_name": "Новосибирск"}])
+
+    message, keyboard = main.handle_category_selected(
+        client,
+        6003,
+        "bot-token",
+        category="Красота",
+        category_slug="beauty",
+        gateway=PartnersGatewayShouldNotBeCalled(),
+    )
+
+    assert "Beauty Partner" in message
+    assert client.catalog_calls == [{"token": "client-token", "city_slug": "novosibirsk", "category_slug": "beauty", "q": None}]
+    assert get_user_state(6003)["web_catalog_partners_by_id"]["11"]["name"] == "Beauty Partner"
+    assert "partner_id" in keyboard
+
+
+@pytest.mark.parametrize("payload", [
+    [{"id": 1, "name": "List Partner"}],
+    {"items": [{"id": 2, "name": "Items Partner"}]},
+    {"results": [{"id": 3, "name": "Results Partner"}]},
+    {"partners": [{"id": 4, "name": "Partners Partner"}]},
+])
+def test_web_catalog_response_wrappers_are_supported(payload):
+    partners = main.extract_web_catalog_partners(payload)
+
+    assert len(partners) == 1
+    assert partners[0]["name"].endswith("Partner")
+
+
+def test_category_selected_uses_nested_profile_city_when_state_city_missing():
+    reset_user_state(6004)
+    state = get_user_state(6004)
+    state["web_client_token"] = "client-token"
+    state["web_client_profile"] = {"selected_city": {"slug": "cherepovets"}}
+    client = PartnersClient(partners=[])
+
+    message, _keyboard = main.handle_category_selected(client, 6004, "bot-token", category="all", category_slug=None)
+
+    assert client.catalog_calls == [{"token": "client-token", "city_slug": "cherepovets", "category_slug": None, "q": None}]
+    assert message == texts.PARTNERS_EMPTY_TEXT
+    assert "Данные пока не найдены" not in message
+
+
+def test_category_selected_web_api_error_returns_safe_text_without_raw_exception():
+    reset_user_state(6005)
+    get_user_state(6005)["web_client_token"] = "client-token"
+    client = PartnersClient(partners_error=WebApiError("server_error", status_code=500, detail="token client-token SECRET"))
+
+    message, _keyboard = main.handle_category_selected(client, 6005, "bot-token", category="Красота", category_slug="beauty")
+
+    assert "Не удалось получить партнёров из WEB-кабинета" in message
+    assert "client-token" not in message
+    assert "SECRET" not in message
+    assert "server_error" not in message
+
+
+def test_unknown_category_slug_does_not_crash_or_call_catalog():
+    reset_user_state(6006)
+    get_user_state(6006)["web_client_token"] = "client-token"
+    client = PartnersClient()
+
+    message, _keyboard = main.handle_category_selected(client, 6006, "bot-token", category="Неизвестная категория", category_slug=None)
+
+    assert "Не удалось определить категорию" in message
+    assert client.catalog_calls == []

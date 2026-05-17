@@ -253,3 +253,43 @@ def test_get_client_verifications_omits_all_or_none_status_query(status):
     client.get_client_verifications("client-token", status=status)
 
     assert session.calls[0]["params"] is None
+
+
+def test_get_client_profile_builds_correct_authorized_request():
+    session = FakeSession(response=FakeResponse(payload={"id": 7, "selected_city_slug": "novosibirsk"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_profile("client-token") == {"id": 7, "selected_city_slug": "novosibirsk"}
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_get_client_catalog_partners_builds_authorized_request_with_filters():
+    payload = [{"id": 1, "name": "Beauty"}]
+    session = FakeSession(response=FakeResponse(payload=payload))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_catalog_partners(
+        "client-token",
+        city_slug="novosibirsk",
+        category_slug="beauty",
+        q="spa",
+    ) == payload
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/catalog/partners"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["params"] == {"city_slug": "novosibirsk", "category_slug": "beauty", "q": "spa"}
+
+
+def test_get_client_catalog_partners_omits_empty_filters():
+    session = FakeSession(response=FakeResponse(payload=[]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.get_client_catalog_partners("client-token")
+
+    assert session.calls[0]["params"] is None
