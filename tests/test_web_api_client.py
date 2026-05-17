@@ -328,3 +328,69 @@ def test_create_client_partner_verification_without_offer_uses_empty_payload():
     client.create_client_partner_verification("client-token", 11)
 
     assert session.calls[0]["json"] == {}
+
+
+def test_create_client_payment_request_posts_authorized_payload():
+    session = FakeSession(response=FakeResponse(payload={"id": 101, "status": "pending"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.create_client_payment_request("client-token", amount=1500, source="vk", comment="test") == {
+        "id": 101,
+        "status": "pending",
+    }
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["json"] == {"amount": 1500, "source": "vk", "comment": "test"}
+
+
+def test_get_client_payment_requests_builds_authorized_request():
+    session = FakeSession(response=FakeResponse(payload=[{"id": 101}]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_payment_requests("client-token") == [{"id": 101}]
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_get_client_payment_request_builds_authorized_request():
+    session = FakeSession(response=FakeResponse(payload={"id": 101}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_payment_request("client-token", 101) == {"id": 101}
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests/101"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_mark_client_payment_paid_posts_authorized_comment():
+    session = FakeSession(response=FakeResponse(payload={"id": 101, "status": "paid"}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.mark_client_payment_paid("client-token", 101, comment="paid in vk") == {"id": 101, "status": "paid"}
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests/101/mark-paid"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["json"] == {"comment": "paid in vk"}
+
+
+def test_add_client_payment_receipt_posts_authorized_payload():
+    session = FakeSession(response=FakeResponse(payload={"id": 301}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.add_client_payment_receipt("client-token", 101, "https://example.test/receipt.jpg") == {"id": 301}
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests/101/receipts"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["json"] == {"file_url": "https://example.test/receipt.jpg", "uploaded_via": "vk"}

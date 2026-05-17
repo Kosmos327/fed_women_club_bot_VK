@@ -154,6 +154,58 @@ class WebApiClient:
             },
         )
 
+
+    def create_client_payment_request(
+        self,
+        token: str,
+        amount: Any | None = None,
+        source: str = "vk",
+        comment: str | None = None,
+    ) -> dict:
+        payload = self.request(
+            "POST",
+            "/clients/me/payment-requests",
+            token=token,
+            json={"amount": amount, "source": source, "comment": comment},
+        ) or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def get_client_payment_requests(self, token: str) -> list[dict] | dict:
+        return self.request("GET", "/clients/me/payment-requests", token=token) or []
+
+    def get_client_payment_request(self, token: str, payment_request_id: int) -> dict:
+        payload = self.request("GET", f"/clients/me/payment-requests/{payment_request_id}", token=token) or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def mark_client_payment_paid(
+        self,
+        token: str,
+        payment_request_id: int,
+        comment: str | None = None,
+    ) -> dict:
+        payload = self.request(
+            "POST",
+            f"/clients/me/payment-requests/{payment_request_id}/mark-paid",
+            token=token,
+            json={"comment": comment},
+        ) or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def add_client_payment_receipt(
+        self,
+        token: str,
+        payment_request_id: int,
+        file_url: str,
+        uploaded_via: str = "vk",
+    ) -> dict:
+        payload = self.request(
+            "POST",
+            f"/clients/me/payment-requests/{payment_request_id}/receipts",
+            token=token,
+            json={"file_url": file_url, "uploaded_via": uploaded_via},
+        ) or {}
+        return payload if isinstance(payload, dict) else {}
+
     def get_client_catalog_partners(
         self,
         token: str,

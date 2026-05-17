@@ -73,6 +73,9 @@ from texts import (
     PAYMENT_RECEIPT_RECEIVED_TEXT,
     PAYMENT_RECEIPT_REQUEST_TEXT,
     PAYMENT_REQUEST_NOT_FOUND_TEXT,
+    PAYMENT_WEB_LINK_REQUIRED_TEXT,
+    PAYMENT_WEB_NOT_FOUND_TEXT,
+    PAYMENT_WEB_UNAVAILABLE_TEXT,
     PRIVILEGE_LIMIT_REACHED_TEXT,
     SERVICE_SEARCH_EMPTY_TEXT,
     SERVICE_SEARCH_PROMPT_TEXT,
@@ -668,6 +671,14 @@ def format_city_selected_message(city: str) -> str:
     return f"Город выбран: {city}. Теперь покажем партнёров и предложения рядом."
 
 
+WEB_PAYMENT_STATUS_LABELS = {
+    "pending": "Ожидает оплаты",
+    "paid": "Оплачено, ожидает проверки",
+    "approved": "Подтверждено",
+    "rejected": "Отклонено",
+}
+
+
 def format_payment_request_message(payment: dict) -> str:
     amount = payment.get("amount") or "—"
     instructions = (payment.get("payment_instructions") or "").strip()
@@ -676,6 +687,181 @@ def format_payment_request_message(payment: dict) -> str:
         parts.append(instructions)
     parts.append("После оплаты нажмите «✅ Я оплатил» и отправьте скрин оплаты.")
     return "\n".join(parts)
+
+
+def format_web_payment_status(status: object) -> str:
+    raw_status = str(status or "pending").strip().lower()
+    return WEB_PAYMENT_STATUS_LABELS.get(raw_status, raw_status or "—")
+
+
+def format_web_payment_request(payment: dict) -> str:
+    lines = [
+        f"ID заявки: {payment.get('id') or '—'}",
+        f"Сумма: {payment.get('amount') or '—'}",
+        f"Статус: {format_web_payment_status(payment.get('status'))}",
+        f"Создана: {format_user_date(payment.get('created_at'))}",
+    ]
+    comment = payment.get("comment")
+    if comment:
+        lines.append(f"Комментарий: {comment}")
+    access_until = payment.get("access_until")
+    if access_until:
+        lines.append(f"Доступ до: {format_user_date(access_until)}")
+    return "\n".join(lines)
+
+
+def format_web_payment_created_message(payment: dict) -> str:
+    instructions = (
+        (payment.get("payment_instructions") or payment.get("instructions") or "").strip()
+        or "Оплатите подписку по реквизитам из WEB-кабинета или по инструкции администратора клуба."
+    )
+    return "\n\n".join(
+        [
+            "Заявка на оплату создана",
+            format_web_payment_request({**payment, "status": payment.get("status") or "pending"}),
+            instructions,
+            "После оплаты нажмите «✅ Я оплатил». Подписка не продлевается автоматически: администратор проверит оплату вручную.",
+        ]
+    )
+
+
+def format_web_payment_paid_message(payment: dict) -> str:
+    return "\n\n".join(
+        [
+            "Спасибо! Мы отметили заявку как оплаченную.",
+            format_web_payment_request({**payment, "status": payment.get("status") or "paid"}),
+            "Администратор проверит оплату вручную. Подписка будет обновлена только после подтверждения.",
+        ]
+    )
+
+
+def map_web_payment_error_to_text(exc: WebApiError) -> str:
+    if exc.status_code in {401, 403} or exc.code in {"unauthenticated", "forbidden"}:
+        return PAYMENT_WEB_LINK_REQUIRED_TEXT
+    if exc.status_code == 404 or exc.code == "not_found":
+        return PAYMENT_WEB_NOT_FOUND_TEXT
+    return PAYMENT_WEB_UNAVAILABLE_TEXT
+
+
+def extract_web_payment_requests(payload: list[dict] | dict) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("items", "results", "payment_requests", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def choose_latest_pending_or_paid_payment_request(payload: list[dict] | dict) -> dict | None:
+    for payment in extract_web_payment_requests(payload):
+        if str(payment.get("status") or "").strip().lower() in {"pending", "paid"}:
+            return payment
+    return None
+
+
+def handle_web_payment_request(web_client: WebApiClient, vk_user_id: int, bot_token: str) -> tuple[str, str]:
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id) if is_linked else None
+    if not token:
+        logger.info(
+            "Payment request skipped source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s",
+            vk_user_id,
+            None,
+            False,
+            "missing_token",
+        )
+        return PAYMENT_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+    try:
+        payment = web_client.create_client_payment_request(token, amount=None, source="vk", comment=None)
+    except WebApiError as exc:
+        logger.warning(
+            "Payment request failed source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s code=%s",
+            vk_user_id,
+            None,
+            True,
+            exc.status_code,
+            exc.code,
+        )
+        return map_web_payment_error_to_text(exc), get_main_keyboard()
+    payment_request_id = payment.get("id")
+    get_user_state(vk_user_id)["last_payment_request_id"] = payment_request_id
+    logger.info(
+        "Payment request created source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s",
+        vk_user_id,
+        payment_request_id,
+        True,
+        payment.get("status") or "pending",
+    )
+    return format_web_payment_created_message(payment), get_payment_request_keyboard()
+
+
+def handle_web_payment_paid(web_client: WebApiClient, vk_user_id: int, bot_token: str) -> str:
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id) if is_linked else None
+    if not token:
+        logger.info(
+            "Payment mark-paid skipped source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s",
+            vk_user_id,
+            None,
+            False,
+            "missing_token",
+        )
+        return PAYMENT_WEB_LINK_REQUIRED_TEXT
+
+    state = get_user_state(vk_user_id)
+    payment_request_id = state.get("last_payment_request_id")
+    if not payment_request_id:
+        try:
+            latest = choose_latest_pending_or_paid_payment_request(web_client.get_client_payment_requests(token))
+        except WebApiError as exc:
+            logger.warning(
+                "Payment requests lookup failed source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s code=%s",
+                vk_user_id,
+                None,
+                True,
+                exc.status_code,
+                exc.code,
+            )
+            return map_web_payment_error_to_text(exc)
+        if latest:
+            payment_request_id = latest.get("id")
+            state["last_payment_request_id"] = payment_request_id
+    if not payment_request_id:
+        logger.info(
+            "Payment mark-paid skipped source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s",
+            vk_user_id,
+            None,
+            True,
+            "missing_payment_request",
+        )
+        return PAYMENT_REQUEST_NOT_FOUND_TEXT
+
+    try:
+        payment = web_client.mark_client_payment_paid(
+            token,
+            int(payment_request_id),
+            comment="Клиент нажал Я оплатил в VK",
+        )
+    except WebApiError as exc:
+        logger.warning(
+            "Payment mark-paid failed source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s code=%s",
+            vk_user_id,
+            payment_request_id,
+            True,
+            exc.status_code,
+            exc.code,
+        )
+        return map_web_payment_error_to_text(exc)
+    logger.info(
+        "Payment marked paid source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s",
+        vk_user_id,
+        payment_request_id,
+        True,
+        payment.get("status") or "paid",
+    )
+    return format_web_payment_paid_message(payment)
 
 
 def _coerce_bool(value: object) -> bool | None:
@@ -1171,12 +1357,11 @@ def main() -> None:
                         send_message(vk_api, peer_id, message_text, get_main_keyboard())
                         continue
                     if action == "pay" or text in {"оплатить подписку", normalize_text(BUTTON_PAY)}:
-                        payment = gateway.create_payment_request(from_id)
-                        state["last_payment_request_id"] = payment.get("id")
-                        send_message(vk_api, peer_id, format_payment_request_message(payment), get_payment_request_keyboard())
+                        message_text, keyboard = handle_web_payment_request(web_client, from_id, config.bot_api_token)
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "payment_paid" or text == "я оплатил":
-                        send_message(vk_api, peer_id, handle_payment_paid(gateway, from_id))
+                        send_message(vk_api, peer_id, handle_web_payment_paid(web_client, from_id, config.bot_api_token))
                         continue
                     file_url = extract_attachment_url(message)
                     if file_url:
