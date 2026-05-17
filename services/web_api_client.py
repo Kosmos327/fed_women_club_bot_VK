@@ -110,6 +110,10 @@ class WebApiClient:
     def get_client_subscription(self, token: str) -> dict:
         return self.request("GET", "/clients/me/subscription", token=token) or {}
 
+    def get_client_verifications(self, token: str, status: str | None = None) -> list[dict] | dict:
+        params = {"status": "active"} if status == "active" else None
+        return self.request("GET", "/clients/me/verifications", token=token, params=params) or []
+
     def exchange_vk_link_code(self, vk_user_id: int | str, code: str, bot_token: str) -> Any:
         return self.request(
             "POST",

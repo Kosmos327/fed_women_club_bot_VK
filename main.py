@@ -58,6 +58,8 @@ from texts import (
     MAIN_MENU_TEXT,
     MY_PRIVILEGES_EMPTY_TEXT,
     MY_PRIVILEGES_FILTER_TEXT,
+    MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT,
+    MY_PRIVILEGES_WEB_UNAVAILABLE_TEXT,
     NO_SUBSCRIPTION_TEXT,
     PARTNERS_FOUND_TEXT,
     PARTNERS_INTRO_TEXT,
@@ -200,18 +202,134 @@ def format_service_card(service: dict, partner_name: Optional[str] = None, partn
     return "\n".join(lines)
 
 
+WEB_VERIFICATION_STATUS_LABELS = {
+    "active": "Активна",
+    "confirmed": "Использована / Подтверждена",
+    "expired": "Истекла",
+    "cancelled": "Отменена",
+}
+
+
+def format_privilege_status(status: object) -> str:
+    if status is None:
+        return "—"
+    raw_status = str(status).strip()
+    if not raw_status:
+        return "—"
+    return WEB_VERIFICATION_STATUS_LABELS.get(raw_status.lower(), raw_status)
+
+
+def _nested_dict_value(data: dict, parent_key: str, child_key: str) -> object | None:
+    parent = data.get(parent_key)
+    if isinstance(parent, dict):
+        return parent.get(child_key)
+    return None
+
+
+def map_web_verification_to_code_item(verification: dict) -> dict:
+    partner_name = verification.get("partner_name") or _nested_dict_value(verification, "partner", "name")
+    offer_title = verification.get("offer_title") or _nested_dict_value(verification, "offer", "title")
+    service_title = offer_title or verification.get("service_title") or verification.get("service_name")
+    return {
+        "code": verification.get("code"),
+        "partner_name": partner_name,
+        "service_title": service_title,
+        "status": verification.get("status"),
+        "created_at": verification.get("created_at"),
+        "expires_at": verification.get("expires_at"),
+        "confirmed_at": verification.get("confirmed_at"),
+    }
+
+
+def extract_web_verifications(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict):
+        raw_items = None
+        for key in ("items", "verifications", "results"):
+            if isinstance(payload.get(key), list):
+                raw_items = payload.get(key)
+                break
+        if raw_items is None:
+            raw_items = []
+    else:
+        raw_items = []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
 def format_code_item(code_data: dict) -> str:
     lines = [
-        f"Привилегия: {code_data.get('code') or '—'}",
+        f"🎁 Код привилегии: {code_data.get('code') or '—'}",
         f"Партнёр: {code_data.get('partner_name') or '—'}",
-        f"Статус: {code_data.get('status') or '—'}",
+        f"Статус: {format_privilege_status(code_data.get('status'))}",
         f"Выдана: {format_user_date(code_data.get('created_at'))}",
         f"Действует до: {format_user_date(code_data.get('expires_at'))}",
     ]
-    service_name = code_data.get("service_title") or code_data.get("service_name")
+    service_name = code_data.get("offer_title") or code_data.get("service_title") or code_data.get("service_name")
     if _is_filled(service_name):
         lines.insert(2, f"Предложение: {service_name}")
+    if _is_filled(code_data.get("confirmed_at")):
+        lines.append(f"Подтверждена: {format_user_date(code_data.get('confirmed_at'))}")
     return "\n".join(lines)
+
+
+def format_web_verifications_message(payload: object) -> str:
+    verifications = extract_web_verifications(payload)
+    if not verifications:
+        return MY_PRIVILEGES_EMPTY_TEXT
+    return "\n\n".join(format_code_item(map_web_verification_to_code_item(item)) for item in verifications)
+
+
+def map_web_verifications_error_to_text(error: WebApiError) -> str:
+    if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
+        return MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT
+    return MY_PRIVILEGES_WEB_UNAVAILABLE_TEXT
+
+
+def handle_my_codes_filter(
+    web_client: WebApiClient,
+    vk_user_id: int | str,
+    bot_token: str,
+    status: str | None = None,
+    gateway: BackendGateway | None = None,
+) -> str:
+    normalized_status = "active" if status == "active" else None
+    is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
+    token = get_web_client_token(vk_user_id)
+    logger.info(
+        "My privileges requested source=web_api vk_user_id=%s status=%s token_present=%s",
+        vk_user_id,
+        normalized_status or "all",
+        bool(token),
+    )
+    if not is_linked or not token:
+        logger.info(
+            "My privileges unavailable source=web_api vk_user_id=%s status=%s token_present=%s reason=no_web_token",
+            vk_user_id,
+            normalized_status or "all",
+            bool(token),
+        )
+        return MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT
+    try:
+        payload = web_client.get_client_verifications(token, normalized_status)
+    except WebApiError as exc:
+        logger.warning(
+            "My privileges WEB API error source=web_api vk_user_id=%s status=%s token_present=%s code=%s http_status=%s",
+            vk_user_id,
+            normalized_status or "all",
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        return map_web_verifications_error_to_text(exc)
+    logger.info(
+        "My privileges loaded source=web_api vk_user_id=%s status=%s token_present=%s count=%s",
+        vk_user_id,
+        normalized_status or "all",
+        True,
+        len(extract_web_verifications(payload)),
+    )
+    return format_web_verifications_message(payload)
 
 
 def format_city_selected_message(city: str) -> str:
@@ -696,8 +814,8 @@ def main() -> None:
                         continue
                     if action == "codes_filter":
                         status = payload.get("status")
-                        codes = gateway.get_my_codes(from_id, status=None if status == "all" else status)
-                        send_message(vk_api, peer_id, "\n\n".join(format_code_item(c) for c in codes) if codes else MY_PRIVILEGES_EMPTY_TEXT, get_codes_filter_keyboard())
+                        message_text = handle_my_codes_filter(web_client, from_id, config.bot_api_token, status=status, gateway=gateway)
+                        send_message(vk_api, peer_id, message_text, get_codes_filter_keyboard())
                         continue
                     if action == "subscription" or text == normalize_text(BUTTON_SUBSCRIPTION):
                         message_text = handle_subscription_status(web_client, from_id, config.bot_api_token, gateway=gateway)

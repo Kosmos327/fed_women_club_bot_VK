@@ -221,3 +221,35 @@ def test_onboard_vk_client_returns_password_setup_fields_unfiltered():
     client = WebApiClient("https://bloomclub.ru", session=session)
 
     assert client.onboard_vk_client(123, "bot-service-token") == payload
+
+
+def test_get_client_verifications_builds_authorized_request_without_status_by_default():
+    session = FakeSession(response=FakeResponse(payload=[{"code": "A1"}]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_client_verifications("client-token") == [{"code": "A1"}]
+
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/verifications"
+    assert call["headers"]["Authorization"] == "Bearer client-token"
+    assert call["params"] is None
+
+
+def test_get_client_verifications_passes_active_status_query():
+    session = FakeSession(response=FakeResponse(payload=[]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.get_client_verifications("client-token", status="active")
+
+    assert session.calls[0]["params"] == {"status": "active"}
+
+
+@pytest.mark.parametrize("status", [None, "all"])
+def test_get_client_verifications_omits_all_or_none_status_query(status):
+    session = FakeSession(response=FakeResponse(payload=[]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.get_client_verifications("client-token", status=status)
+
+    assert session.calls[0]["params"] is None
