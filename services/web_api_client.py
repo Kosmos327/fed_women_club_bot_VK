@@ -172,6 +172,19 @@ class WebApiClient:
         }
         return self.request("GET", "/clients/catalog/partners", token=token, params=params or None)
 
+    def get_client_partner_offers(self, token: str, partner_id: int) -> list[dict] | dict:
+        return self.request("GET", f"/clients/partners/{partner_id}/offers", token=token) or []
+
+    def create_client_partner_verification(
+        self,
+        token: str,
+        partner_id: int,
+        offer_id: int | None = None,
+    ) -> dict:
+        body = {"offer_id": offer_id} if offer_id is not None else {}
+        payload = self.request("POST", f"/clients/partners/{partner_id}/verify", token=token, json=body) or {}
+        return payload if isinstance(payload, dict) else {}
+
     def create_partner_verification(
         self,
         token: str,
