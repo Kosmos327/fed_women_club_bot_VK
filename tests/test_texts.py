@@ -930,3 +930,155 @@ def test_web_get_privilege_without_offer_calls_verify_with_empty_offer_id():
 
     assert client.verification_calls == [{"token": "client-token", "partner_id": 11, "offer_id": None}]
     assert "NO-OFFER" in message
+
+
+class PaymentGatewayShouldNotBeCalled:
+    def create_payment_request(self, vk_user_id):
+        raise AssertionError("legacy payment endpoint must not be called")
+
+    def mark_payment_paid(self, vk_user_id, payment_request_id=None):
+        raise AssertionError("legacy payment paid endpoint must not be called")
+
+
+class PaymentWebClient:
+    def __init__(self, token_payload=None, token_error=None, create_error=None, mark_error=None, requests_error=None, requests=None):
+        self.token_payload = token_payload
+        self.token_error = token_error
+        self.create_error = create_error
+        self.mark_error = mark_error
+        self.requests_error = requests_error
+        self.requests = requests if requests is not None else []
+        self.bound_token_calls = []
+        self.create_calls = []
+        self.mark_calls = []
+        self.list_calls = []
+
+    def get_vk_bound_token(self, vk_user_id, bot_token):
+        self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
+        if self.token_error:
+            raise self.token_error
+        return self.token_payload or {}
+
+    def create_client_payment_request(self, token, amount=None, source="vk", comment=None):
+        self.create_calls.append({"token": token, "amount": amount, "source": source, "comment": comment})
+        if self.create_error:
+            raise self.create_error
+        return {"id": 101, "amount": 1500, "status": "pending", "created_at": "2026-05-17T10:00:00Z"}
+
+    def mark_client_payment_paid(self, token, payment_request_id, comment=None):
+        self.mark_calls.append({"token": token, "payment_request_id": payment_request_id, "comment": comment})
+        if self.mark_error:
+            raise self.mark_error
+        return {"id": payment_request_id, "amount": 1500, "status": "paid", "created_at": "2026-05-17T10:00:00Z"}
+
+    def get_client_payment_requests(self, token):
+        self.list_calls.append(token)
+        if self.requests_error:
+            raise self.requests_error
+        return self.requests
+
+
+def test_format_web_payment_request_maps_statuses_and_fields():
+    message = main.format_web_payment_request(
+        {
+            "id": 7,
+            "amount": 1500,
+            "status": "approved",
+            "created_at": "2026-05-17T10:00:00Z",
+            "comment": "manual",
+            "access_until": "2026-06-17T10:00:00Z",
+        }
+    )
+
+    assert "ID заявки: 7" in message
+    assert "Сумма: 1500" in message
+    assert "Статус: Подтверждено" in message
+    assert "Комментарий: manual" in message
+    assert "Доступ до:" in message
+    assert main.format_web_payment_status("pending") == "Ожидает оплаты"
+    assert main.format_web_payment_status("paid") == "Оплачено, ожидает проверки"
+    assert main.format_web_payment_status("rejected") == "Отклонено"
+
+
+def test_payment_button_with_web_token_creates_web_request_not_legacy():
+    reset_user_state(7001)
+    get_user_state(7001)["web_client_token"] = "client-token"
+    client = PaymentWebClient()
+
+    message, keyboard = main.handle_web_payment_request(client, 7001, "bot-token")
+
+    assert "Заявка на оплату создана" in message
+    assert "ID заявки: 101" in message
+    assert "Ожидает оплаты" in message
+    assert "администратор проверит" in message.lower()
+    assert get_user_state(7001)["last_payment_request_id"] == 101
+    assert client.create_calls == [{"token": "client-token", "amount": None, "source": "vk", "comment": None}]
+    assert "payment_paid" in keyboard
+
+
+def test_payment_button_without_web_token_returns_link_required_text():
+    reset_user_state(7002)
+    client = PaymentWebClient(token_error=WebApiError("not_found", status_code=404))
+
+    message, _keyboard = main.handle_web_payment_request(client, 7002, "bot-token")
+
+    assert "WEB-кабинет" in message
+    assert "Привязать КОД" in message
+    assert "Присоединиться к клубу" in message
+    assert client.create_calls == []
+
+
+def test_payment_paid_marks_stored_web_request_paid():
+    reset_user_state(7003)
+    state = get_user_state(7003)
+    state["web_client_token"] = "client-token"
+    state["last_payment_request_id"] = 101
+    client = PaymentWebClient()
+
+    message = main.handle_web_payment_paid(client, 7003, "bot-token")
+
+    assert "отметили заявку как оплаченную" in message
+    assert "Оплачено, ожидает проверки" in message
+    assert "проверит оплату вручную" in message
+    assert client.mark_calls == [
+        {"token": "client-token", "payment_request_id": 101, "comment": "Клиент нажал Я оплатил в VK"}
+    ]
+
+
+def test_payment_paid_without_stored_id_uses_latest_pending_request():
+    reset_user_state(7004)
+    get_user_state(7004)["web_client_token"] = "client-token"
+    client = PaymentWebClient(requests=[{"id": 202, "status": "pending", "amount": 1500}])
+
+    message = main.handle_web_payment_paid(client, 7004, "bot-token")
+
+    assert "Оплачено, ожидает проверки" in message
+    assert get_user_state(7004)["last_payment_request_id"] == 202
+    assert client.list_calls == ["client-token"]
+    assert client.mark_calls[0]["payment_request_id"] == 202
+
+
+def test_payment_paid_without_any_request_asks_to_create_payment():
+    reset_user_state(7005)
+    get_user_state(7005)["web_client_token"] = "client-token"
+    client = PaymentWebClient(requests=[])
+
+    message = main.handle_web_payment_paid(client, 7005, "bot-token")
+
+    assert message == texts.PAYMENT_REQUEST_NOT_FOUND_TEXT
+    assert client.mark_calls == []
+
+
+def test_web_payment_errors_return_safe_texts_without_raw_detail():
+    reset_user_state(7006)
+    get_user_state(7006)["web_client_token"] = "client-token"
+    client = PaymentWebClient(create_error=WebApiError("server_error", status_code=500, detail="raw boom"))
+
+    message, _keyboard = main.handle_web_payment_request(client, 7006, "bot-token")
+
+    assert "Не удалось обработать оплату" in message
+    assert "raw boom" not in message
+    assert "server_error" not in message
+
+    assert "WEB-кабинет" in main.map_web_payment_error_to_text(WebApiError("unauthenticated", status_code=401))
+    assert main.map_web_payment_error_to_text(WebApiError("not_found", status_code=404)) == texts.PAYMENT_WEB_NOT_FOUND_TEXT
