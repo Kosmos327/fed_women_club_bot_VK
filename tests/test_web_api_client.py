@@ -236,13 +236,14 @@ def test_get_client_verifications_builds_authorized_request_without_status_by_de
     assert call["params"] is None
 
 
-def test_get_client_verifications_passes_active_status_query():
+@pytest.mark.parametrize("status", ["active", "confirmed", "used", "expired"])
+def test_get_client_verifications_passes_supported_status_query(status):
     session = FakeSession(response=FakeResponse(payload=[]))
     client = WebApiClient("https://bloomclub.ru", session=session)
 
-    client.get_client_verifications("client-token", status="active")
+    client.get_client_verifications("client-token", status=status)
 
-    assert session.calls[0]["params"] == {"status": "active"}
+    assert session.calls[0]["params"] == {"status": status}
 
 
 @pytest.mark.parametrize("status", [None, "all"])

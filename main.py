@@ -2,7 +2,7 @@ import json
 import logging
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -222,17 +222,42 @@ def get_partner_stale_keyboard(vk_user_id: int | str) -> str:
     return get_stale_catalog_keyboard()
 
 
-def format_user_date(value: str | None) -> str:
-    if not value:
+def format_user_date(value: object) -> str:
+    if value is None:
         return "—"
-    raw_value = value.strip()
+    raw_value = str(value).strip()
     if not raw_value:
         return "—"
+    has_time = "T" in raw_value or " " in raw_value
     try:
         parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
     except ValueError:
         return raw_value or "—"
-    return parsed.strftime("%d.%m.%Y")
+    if not has_time:
+        return raw_value
+    return parsed.strftime("%d.%m.%Y %H:%M")
+
+
+def _parse_user_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    raw_value = str(value).strip()
+    if not raw_value or ("T" not in raw_value and " " not in raw_value):
+        return None
+    try:
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _expires_at_or_issued_plus_15_minutes(code_data: dict) -> object:
+    expires_at = code_data.get("expires_at")
+    if _is_filled(expires_at):
+        return expires_at
+    created_at = _parse_user_datetime(code_data.get("created_at"))
+    if created_at is None:
+        return None
+    return (created_at + timedelta(minutes=15)).isoformat()
 
 
 def format_money(value: object) -> str:
@@ -301,9 +326,26 @@ def format_service_card(service: dict, partner_name: Optional[str] = None, partn
 
 WEB_VERIFICATION_STATUS_LABELS = {
     "active": "Активна",
-    "confirmed": "Использована / Подтверждена",
+    "confirmed": "Использована",
+    "used": "Использована",
     "expired": "Истекла",
     "cancelled": "Отменена",
+}
+
+MY_PRIVILEGES_API_STATUS_BY_FILTER = {
+    "active": "active",
+    "all": None,
+    "used": "confirmed",
+    "confirmed": "confirmed",
+    "expired": "expired",
+}
+
+MY_PRIVILEGES_EMPTY_BY_FILTER = {
+    "active": "Активных привилегий пока нет. Выберите предложение в каталоге партнёров.",
+    "all": "Привилегий пока нет. Выберите предложение в каталоге партнёров.",
+    "used": "Использованных привилегий пока нет.",
+    "confirmed": "Использованных привилегий пока нет.",
+    "expired": "Истёкших привилегий пока нет.",
 }
 
 
@@ -328,13 +370,13 @@ def map_web_verification_to_code_item(verification: dict) -> dict:
     offer_title = verification.get("offer_title") or _nested_dict_value(verification, "offer", "title")
     service_title = offer_title or verification.get("service_title") or verification.get("service_name")
     return {
-        "code": verification.get("code"),
+        "code": verification.get("code") or verification.get("dynamic_code"),
         "partner_name": partner_name,
         "service_title": service_title,
         "status": verification.get("status"),
-        "created_at": verification.get("created_at"),
+        "created_at": verification.get("created_at") or verification.get("issued_at"),
         "expires_at": verification.get("expires_at"),
-        "confirmed_at": verification.get("confirmed_at"),
+        "confirmed_at": verification.get("confirmed_at") or verification.get("used_at"),
     }
 
 
@@ -354,33 +396,53 @@ def extract_web_verifications(payload: object) -> list[dict]:
     return [item for item in raw_items if isinstance(item, dict)]
 
 
+def _normalized_privilege_status(status: object) -> str:
+    return str(status or "").strip().lower()
+
+
 def format_code_item(code_data: dict) -> str:
+    status = _normalized_privilege_status(code_data.get("status"))
     lines = [
         f"🎁 Код привилегии: {code_data.get('code') or '—'}",
         f"Партнёр: {code_data.get('partner_name') or '—'}",
         f"Статус: {format_privilege_status(code_data.get('status'))}",
         f"Выдана: {format_user_date(code_data.get('created_at'))}",
-        f"Действует до: {format_user_date(code_data.get('expires_at'))}",
     ]
-    service_name = code_data.get("offer_title") or code_data.get("service_title") or code_data.get("service_name")
-    if _is_filled(service_name):
-        lines.insert(2, f"Предложение: {service_name}")
-    if _is_filled(code_data.get("confirmed_at")):
-        lines.append(f"Подтверждена: {format_user_date(code_data.get('confirmed_at'))}")
+    if status == "active":
+        lines.extend(
+            [
+                f"Действует до: {format_user_date(_expires_at_or_issued_plus_15_minutes(code_data))}",
+                "",
+                "Код действует 15 минут с момента выдачи.",
+            ]
+        )
+    elif status in {"confirmed", "used"}:
+        lines.append(f"Использована: {format_user_date(code_data.get('confirmed_at'))}")
+    elif status == "expired":
+        lines.append(f"Истекла: {format_user_date(_expires_at_or_issued_plus_15_minutes(code_data))}")
+    elif _is_filled(code_data.get("expires_at")):
+        lines.append(f"Действует до: {format_user_date(code_data.get('expires_at'))}")
     return "\n".join(lines)
 
 
 def format_web_verifications_message(payload: object) -> str:
     verifications = extract_web_verifications(payload)
     if not verifications:
-        return MY_PRIVILEGES_EMPTY_TEXT
+        return MY_PRIVILEGES_EMPTY_BY_FILTER["all"]
     return "\n\n".join(format_code_item(map_web_verification_to_code_item(item)) for item in verifications)
 
 
-def format_empty_web_privileges_message(subscription: dict | None) -> str:
-    if is_web_subscription_active(subscription):
-        return WEB_PRIVILEGES_EMPTY_WITH_ACTIVE_SUBSCRIPTION_TEXT
-    return WEB_PRIVILEGES_REQUIRE_SUBSCRIPTION_TEXT
+def normalize_my_privileges_filter(status: object) -> str:
+    raw_status = str(status or "all").strip().lower()
+    return raw_status if raw_status in MY_PRIVILEGES_EMPTY_BY_FILTER else "all"
+
+
+def my_privileges_api_status(status: object) -> str | None:
+    return MY_PRIVILEGES_API_STATUS_BY_FILTER[normalize_my_privileges_filter(status)]
+
+
+def format_empty_web_privileges_message(status: object = None) -> str:
+    return MY_PRIVILEGES_EMPTY_BY_FILTER[normalize_my_privileges_filter(status)]
 
 
 def map_web_verifications_error_to_text(error: WebApiError) -> str:
@@ -396,20 +458,21 @@ def handle_my_codes_filter(
     status: str | None = None,
     gateway: BackendGateway | None = None,
 ) -> str:
-    normalized_status = "active" if status == "active" else None
+    normalized_filter = normalize_my_privileges_filter(status)
+    normalized_status = my_privileges_api_status(normalized_filter)
     is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
     token = get_web_client_token(vk_user_id)
     logger.info(
         "My privileges requested source=web_api vk_user_id=%s status=%s token_present=%s",
         vk_user_id,
-        normalized_status or "all",
+        normalized_filter,
         bool(token),
     )
     if not is_linked or not token:
         logger.info(
             "My privileges unavailable source=web_api vk_user_id=%s status=%s token_present=%s reason=no_web_token",
             vk_user_id,
-            normalized_status or "all",
+            normalized_filter,
             bool(token),
         )
         return MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT
@@ -419,7 +482,7 @@ def handle_my_codes_filter(
         logger.warning(
             "My privileges WEB API error source=web_api vk_user_id=%s status=%s token_present=%s code=%s http_status=%s",
             vk_user_id,
-            normalized_status or "all",
+            normalized_filter,
             True,
             exc.code,
             exc.status_code,
@@ -429,49 +492,19 @@ def handle_my_codes_filter(
     logger.info(
         "My privileges loaded source=web_api vk_user_id=%s status=%s token_present=%s count=%s",
         vk_user_id,
-        normalized_status or "all",
+        normalized_filter,
         True,
         len(verifications),
     )
     if verifications:
         return format_web_verifications_message(payload)
-    try:
-        subscription = web_client.get_client_subscription(token)
-    except WebApiError as exc:
-        logger.warning(
-            "My privileges subscription check WEB API error source=web_api vk_user_id=%s status=%s token_present=%s code=%s http_status=%s",
-            vk_user_id,
-            normalized_status or "all",
-            True,
-            exc.code,
-            exc.status_code,
-        )
-        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
-    except Exception as exc:
-        logger.warning(
-            "My privileges subscription check unexpected error source=web_api vk_user_id=%s status=%s token_present=%s error_type=%s",
-            vk_user_id,
-            normalized_status or "all",
-            True,
-            type(exc).__name__,
-        )
-        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
-    if not isinstance(subscription, dict):
-        logger.warning(
-            "My privileges subscription check returned unexpected payload source=web_api vk_user_id=%s status=%s token_present=%s",
-            vk_user_id,
-            normalized_status or "all",
-            True,
-        )
-        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
     logger.info(
-        "My privileges empty state resolved source=web_api vk_user_id=%s status=%s token_present=%s active_subscription=%s",
+        "My privileges empty state resolved source=web_api vk_user_id=%s status=%s token_present=%s",
         vk_user_id,
-        normalized_status or "all",
+        normalized_filter,
         True,
-        is_web_subscription_active(subscription),
     )
-    return format_empty_web_privileges_message(subscription)
+    return format_empty_web_privileges_message(normalized_filter)
 
 
 def extract_web_catalog_partners(payload: object) -> list[dict]:
@@ -827,7 +860,14 @@ def format_web_created_verification_message(payload: object, partner: dict | Non
         or verification.get("code")
         or "—"
     )
-    return f"Ваш код привилегии:\n\n{code}\n\nПокажите этот код партнёру перед оплатой."
+    partner_name = code_item.get("partner_name") or (partner or {}).get("name") or "—"
+    return (
+        "🎁 Ваш код привилегии:\n\n"
+        f"{code}\n\n"
+        f"Партнёр: {partner_name}\n"
+        "Код действует 15 минут.\n\n"
+        "Покажите этот код партнёру перед оплатой."
+    )
 
 
 def _is_no_subscription_error(error: WebApiError) -> bool:
@@ -1970,8 +2010,15 @@ def main() -> None:
                         is_linked = restore_web_client_session(web_client, from_id, config.bot_api_token)
                         send_message(vk_api, peer_id, f"{MY_PRIVILEGES_FILTER_TEXT}\n\nWEB-кабинет: {'доступ активен' if is_linked else 'доступ не активен'}", get_codes_filter_keyboard())
                         continue
-                    if action == "codes_filter":
-                        status = payload.get("status")
+                    text_filter_statuses = {
+                        "активные": "active",
+                        "все": "all",
+                        "использованные": "used",
+                        "истёкшие": "expired",
+                        "истекшие": "expired",
+                    }
+                    if action == "codes_filter" or text in text_filter_statuses:
+                        status = payload.get("status") if action == "codes_filter" else text_filter_statuses.get(text)
                         message_text = handle_my_codes_filter(web_client, from_id, config.bot_api_token, status=status, gateway=gateway)
                         send_message(vk_api, peer_id, message_text, get_codes_filter_keyboard())
                         continue

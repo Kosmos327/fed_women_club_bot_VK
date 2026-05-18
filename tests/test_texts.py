@@ -787,7 +787,7 @@ def test_active_web_verification_formats_supported_fields():
                 "code": "ABC-123",
                 "status": "active",
                 "created_at": "2026-05-01T10:00:00Z",
-                "expires_at": "2026-06-01T10:00:00Z",
+                "expires_at": "2026-05-01T10:15:00Z",
                 "confirmed_at": "2026-05-03T10:00:00Z",
                 "partner": {"name": "Beauty Partner"},
                 "offer": {"title": "Скидка на уход"},
@@ -799,60 +799,95 @@ def test_active_web_verification_formats_supported_fields():
 
     assert "🎁 Код привилегии: ABC-123" in message
     assert "Партнёр: Beauty Partner" in message
-    assert "Предложение: Скидка на уход" in message
     assert "Статус: Активна" in message
-    assert "Действует до: 01.06.2026" in message
-    assert "Подтверждена: 03.05.2026" in message
+    assert "Выдана: 01.05.2026 10:00" in message
+    assert "Действует до: 01.05.2026 10:15" in message
+    assert "Код действует 15 минут с момента выдачи." in message
 
 
-def test_empty_web_verifications_with_active_subscription_show_partner_instruction_not_subscribe():
+
+def test_used_and_confirmed_web_verifications_format_as_used():
+    for raw_status in ("confirmed", "used"):
+        message = main.format_web_verifications_message(
+            [
+                {
+                    "code": f"{raw_status}-1",
+                    "status": raw_status,
+                    "created_at": "2026-05-18T17:50:00Z",
+                    "confirmed_at": "2026-05-18T17:55:00Z",
+                    "partner_name": "Coffee Rose",
+                }
+            ]
+        )
+
+        assert f"🎁 Код привилегии: {raw_status}-1" in message
+        assert "Партнёр: Coffee Rose" in message
+        assert "Статус: Использована" in message
+        assert "Выдана: 18.05.2026 17:50" in message
+        assert "Использована: 18.05.2026 17:55" in message
+
+
+def test_expired_web_verification_formats_as_expired():
+    message = main.format_web_verifications_message(
+        [
+            {
+                "code": "EXP-1",
+                "status": "expired",
+                "created_at": "2026-05-18T17:50:00Z",
+                "expires_at": "2026-05-18T18:05:00Z",
+                "partner_name": "Coffee Rose",
+            }
+        ]
+    )
+
+    assert "🎁 Код привилегии: EXP-1" in message
+    assert "Партнёр: Coffee Rose" in message
+    assert "Статус: Истекла" in message
+    assert "Выдана: 18.05.2026 17:50" in message
+    assert "Истекла: 18.05.2026 18:05" in message
+
+
+def test_iso_datetime_has_time_but_date_only_keeps_backend_format():
+    assert main.format_user_date("2026-05-18T17:50:00Z") == "18.05.2026 17:50"
+    assert main.format_user_date("2026-05-18") == "2026-05-18"
+
+def test_empty_active_web_verifications_show_partner_instruction_not_subscribe():
     reset_user_state(5004)
     get_user_state(5004)["web_client_token"] = "client-token"
     client = CodesClient(verifications=[], subscription={"has_active_subscription": True})
 
     message = main.handle_my_codes_filter(client, 5004, "bot-token", status="active")
 
-    assert message == texts.WEB_PRIVILEGES_EMPTY_WITH_ACTIVE_SUBSCRIPTION_TEXT
-    assert "нет полученных привилегий" in message
-    assert "Партнёры и скидки" in message
-    assert "Получить привилегию" in message
-    assert "Оформите подписку" not in message
-    assert "оформите подписку" not in message
-    assert client.subscription_calls == ["client-token"]
-    assert "Данные пока не найдены" not in message
+    assert message == "Активных привилегий пока нет. Выберите предложение в каталоге партнёров."
+    assert client.subscription_calls == []
 
 
-def test_empty_web_verifications_with_inactive_subscription_prompt_payment():
+def test_empty_all_web_verifications_show_catalog_instruction():
     reset_user_state(5008)
     get_user_state(5008)["web_client_token"] = "client-token"
     client = CodesClient(verifications=[], subscription={"has_active_subscription": False})
 
-    message = main.handle_my_codes_filter(client, 5008, "bot-token", status="active")
+    message = main.handle_my_codes_filter(client, 5008, "bot-token", status="all")
 
-    assert message == texts.WEB_PRIVILEGES_REQUIRE_SUBSCRIPTION_TEXT
-    assert "нужна активная подписка" in message
-    assert "💳 Оплатить / Продлить" in message
+    assert message == "Привилегий пока нет. Выберите предложение в каталоге партнёров."
+    assert client.subscription_calls == []
 
 
-def test_empty_web_verifications_subscription_api_error_returns_safe_neutral_text():
+def test_empty_used_and_expired_web_verifications_show_filter_specific_empty_states():
     reset_user_state(5009)
     get_user_state(5009)["web_client_token"] = "client-token"
-    client = CodesClient(
-        verifications=[],
-        subscription_error=WebApiError(
-            "server_error",
-            status_code=500,
-            detail="token client-token failed",
-        ),
-    )
+    client = CodesClient(verifications=[])
 
-    message = main.handle_my_codes_filter(client, 5009, "bot-token", status="active")
+    used_message = main.handle_my_codes_filter(client, 5009, "bot-token", status="used")
+    expired_message = main.handle_my_codes_filter(client, 5009, "bot-token", status="expired")
 
-    assert message == texts.WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
-    assert "нет полученных привилегий" in message
-    assert "раздел партнёров" in message
-    assert "client-token" not in message
-    assert "server_error" not in message
+    assert used_message == "Использованных привилегий пока нет."
+    assert expired_message == "Истёкших привилегий пока нет."
+    assert client.verification_calls == [
+        {"token": "client-token", "status": "confirmed"},
+        {"token": "client-token", "status": "expired"},
+    ]
+    assert client.subscription_calls == []
 
 
 @pytest.mark.parametrize("wrapper_key", ["items", "verifications", "results"])
@@ -864,7 +899,7 @@ def test_web_verification_response_wrappers_are_supported(wrapper_key):
     message = main.handle_my_codes_filter(client, 5005, "bot-token", status="all")
 
     assert "WRAPPED" in message
-    assert "Использована / Подтверждена" in message
+    assert "Использована" in message
 
 
 def test_codes_filter_without_web_token_returns_link_instruction_not_legacy():
@@ -1308,8 +1343,10 @@ def test_web_offer_selected_calls_verify_endpoint_and_formats_code():
     message, _keyboard = main.handle_web_offer_selected(client, 7002, "bot-token", 11, 5)
 
     assert client.verification_calls == [{"token": "client-token", "partner_id": 11, "offer_id": 5}]
-    assert "Ваш код привилегии:" in message
+    assert "🎁 Ваш код привилегии:" in message
     assert "ABC-777" in message
+    assert "Партнёр: Beauty Partner" in message
+    assert "Код действует 15 минут." in message
     assert "Покажите этот код партнёру" in message
 
 
@@ -1318,7 +1355,7 @@ def test_web_created_verification_wrappers_are_supported(wrapper_key):
     message = main.format_web_created_verification_message({wrapper_key: {"code": "WRAP-1", "partner_name": "Partner", "offer_title": "Offer"}})
 
     assert "WRAP-1" in message
-    assert "Ваш код привилегии:" in message
+    assert "🎁 Ваш код привилегии:" in message
 
 
 def test_web_offer_without_token_returns_link_required_text():

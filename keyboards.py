@@ -278,6 +278,7 @@ def get_codes_filter_keyboard() -> str:
     return _keyboard(
         [
             [_button("Активные", "codes_filter", "primary", status="active"), _button("Все", "codes_filter", status="all")],
+            [_button("Использованные", "codes_filter", status="used"), _button("Истёкшие", "codes_filter", status="expired")],
             [_button(BUTTON_MAIN_MENU, "main_menu")],
         ]
     )

@@ -3,6 +3,7 @@ import json
 import keyboards
 
 from keyboards import (
+    BUTTON_MAIN_MENU,
     BUTTON_PASSWORD_SETUP,
     BUTTON_WEB_LOGIN,
     CITIES,
@@ -10,6 +11,7 @@ from keyboards import (
     get_categories_keyboard,
     get_city_keyboard,
     get_main_keyboard,
+    get_codes_filter_keyboard,
     get_password_setup_keyboard,
     get_web_onboarding_keyboard,
 )
@@ -117,6 +119,17 @@ def _row_count(keyboard_json: str) -> int:
     return len(json.loads(keyboard_json)["buttons"])
 
 
+def test_my_privileges_keyboard_contains_all_filters_and_keeps_vk_row_limit():
+    keyboard = json.loads(get_codes_filter_keyboard())
+
+    assert [[button["action"]["label"] for button in row] for row in keyboard["buttons"]] == [
+        ["Активные", "Все"],
+        ["Использованные", "Истёкшие"],
+        [BUTTON_MAIN_MENU],
+    ]
+    assert _row_count(get_codes_filter_keyboard()) <= 5
+
+
 def test_vk_keyboard_builders_keep_safe_row_limit():
     assert _row_count(get_main_keyboard()) <= 5
     assert _row_count(get_city_keyboard()) <= 5
@@ -124,3 +137,4 @@ def test_vk_keyboard_builders_keep_safe_row_limit():
     assert _row_count(keyboards.get_partner_card_keyboard(1, "https://example.com")) <= 5
     assert _row_count(keyboards.get_empty_catalog_keyboard()) <= 5
     assert _row_count(keyboards.get_safe_fallback_keyboard()) <= 5
+    assert _row_count(get_codes_filter_keyboard()) <= 5
