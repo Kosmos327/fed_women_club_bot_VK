@@ -505,12 +505,14 @@ def test_format_web_subscription_active_variants():
     )
     assert "Подписка активна" in main.format_web_subscription_message({"is_active": True, "expires_at": "2026-07-02"})
     assert "Подписка активна" in main.format_web_subscription_message({"status": "active", "paid_until": "2026-08-03"})
+    assert main.is_web_subscription_active({"paid_until": "2099-01-01T00:00:00Z"}) is True
 
 
 def test_format_web_subscription_inactive_variants():
     assert "Подписка не активна" in main.format_web_subscription_message({"has_active_subscription": False})
     assert "Подписка не активна" in main.format_web_subscription_message({"is_active": False})
     assert "Подписка не активна" in main.format_web_subscription_message({"status": "expired"})
+    assert main.is_web_subscription_active({"paid_until": "2000-01-01T00:00:00Z"}) is False
 
 
 def test_subscription_handler_uses_web_api_when_web_token_present_not_legacy():
@@ -563,13 +565,24 @@ def test_subscription_handler_web_api_error_returns_clear_text_not_raw_exception
 
 
 class CodesClient:
-    def __init__(self, verifications=None, token_payload=None, token_error=None, verifications_error=None):
+    def __init__(
+        self,
+        verifications=None,
+        subscription=None,
+        token_payload=None,
+        token_error=None,
+        verifications_error=None,
+        subscription_error=None,
+    ):
         self.verifications = verifications if verifications is not None else []
+        self.subscription = subscription if subscription is not None else {"has_active_subscription": True}
         self.token_payload = token_payload
         self.token_error = token_error
         self.verifications_error = verifications_error
+        self.subscription_error = subscription_error
         self.bound_token_calls = []
         self.verification_calls = []
+        self.subscription_calls = []
 
     def get_vk_bound_token(self, vk_user_id, bot_token):
         self.bound_token_calls.append({"vk_user_id": vk_user_id, "bot_token": bot_token})
@@ -582,6 +595,12 @@ class CodesClient:
         if self.verifications_error:
             raise self.verifications_error
         return self.verifications
+
+    def get_client_subscription(self, token):
+        self.subscription_calls.append(token)
+        if self.subscription_error:
+            raise self.subscription_error
+        return self.subscription
 
 
 class CodesGatewayShouldNotBeCalled:
@@ -606,6 +625,7 @@ def test_codes_filter_uses_web_api_when_token_present_not_legacy():
     assert "Активна" in message
     assert client.bound_token_calls == []
     assert client.verification_calls == [{"token": "client-token", "status": "active"}]
+    assert client.subscription_calls == []
 
 
 def test_codes_filter_all_status_uses_web_api_without_status_query():
@@ -645,15 +665,54 @@ def test_active_web_verification_formats_supported_fields():
     assert "Подтверждена: 03.05.2026" in message
 
 
-def test_empty_web_verifications_show_privileges_empty_text():
+def test_empty_web_verifications_with_active_subscription_show_partner_instruction_not_subscribe():
     reset_user_state(5004)
     get_user_state(5004)["web_client_token"] = "client-token"
-    client = CodesClient(verifications=[])
+    client = CodesClient(verifications=[], subscription={"has_active_subscription": True})
 
     message = main.handle_my_codes_filter(client, 5004, "bot-token", status="active")
 
-    assert message == texts.MY_PRIVILEGES_EMPTY_TEXT
+    assert message == texts.WEB_PRIVILEGES_EMPTY_WITH_ACTIVE_SUBSCRIPTION_TEXT
+    assert "нет полученных привилегий" in message
+    assert "Партнёры и скидки" in message
+    assert "Получить привилегию" in message
+    assert "Оформите подписку" not in message
+    assert "оформите подписку" not in message
+    assert client.subscription_calls == ["client-token"]
     assert "Данные пока не найдены" not in message
+
+
+def test_empty_web_verifications_with_inactive_subscription_prompt_payment():
+    reset_user_state(5008)
+    get_user_state(5008)["web_client_token"] = "client-token"
+    client = CodesClient(verifications=[], subscription={"has_active_subscription": False})
+
+    message = main.handle_my_codes_filter(client, 5008, "bot-token", status="active")
+
+    assert message == texts.WEB_PRIVILEGES_REQUIRE_SUBSCRIPTION_TEXT
+    assert "нужна активная подписка" in message
+    assert "💳 Оплатить / Продлить" in message
+
+
+def test_empty_web_verifications_subscription_api_error_returns_safe_neutral_text():
+    reset_user_state(5009)
+    get_user_state(5009)["web_client_token"] = "client-token"
+    client = CodesClient(
+        verifications=[],
+        subscription_error=WebApiError(
+            "server_error",
+            status_code=500,
+            detail="token client-token failed",
+        ),
+    )
+
+    message = main.handle_my_codes_filter(client, 5009, "bot-token", status="active")
+
+    assert message == texts.WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
+    assert "нет полученных привилегий" in message
+    assert "раздел партнёров" in message
+    assert "client-token" not in message
+    assert "server_error" not in message
 
 
 @pytest.mark.parametrize("wrapper_key", ["items", "verifications", "results"])

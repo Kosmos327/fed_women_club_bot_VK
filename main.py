@@ -60,6 +60,9 @@ from texts import (
     JOIN_CLUB_WEB_UNAVAILABLE_TEXT,
     MAIN_MENU_TEXT,
     MY_PRIVILEGES_EMPTY_TEXT,
+    WEB_PRIVILEGES_EMPTY_WITH_ACTIVE_SUBSCRIPTION_TEXT,
+    WEB_PRIVILEGES_REQUIRE_SUBSCRIPTION_TEXT,
+    WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT,
     MY_PRIVILEGES_FILTER_TEXT,
     MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT,
     MY_PRIVILEGES_WEB_UNAVAILABLE_TEXT,
@@ -295,6 +298,12 @@ def format_web_verifications_message(payload: object) -> str:
     return "\n\n".join(format_code_item(map_web_verification_to_code_item(item)) for item in verifications)
 
 
+def format_empty_web_privileges_message(subscription: dict | None) -> str:
+    if is_web_subscription_active(subscription):
+        return WEB_PRIVILEGES_EMPTY_WITH_ACTIVE_SUBSCRIPTION_TEXT
+    return WEB_PRIVILEGES_REQUIRE_SUBSCRIPTION_TEXT
+
+
 def map_web_verifications_error_to_text(error: WebApiError) -> str:
     if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
         return MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT
@@ -337,14 +346,53 @@ def handle_my_codes_filter(
             exc.status_code,
         )
         return map_web_verifications_error_to_text(exc)
+    verifications = extract_web_verifications(payload)
     logger.info(
         "My privileges loaded source=web_api vk_user_id=%s status=%s token_present=%s count=%s",
         vk_user_id,
         normalized_status or "all",
         True,
-        len(extract_web_verifications(payload)),
+        len(verifications),
     )
-    return format_web_verifications_message(payload)
+    if verifications:
+        return format_web_verifications_message(payload)
+    try:
+        subscription = web_client.get_client_subscription(token)
+    except WebApiError as exc:
+        logger.warning(
+            "My privileges subscription check WEB API error source=web_api vk_user_id=%s status=%s token_present=%s code=%s http_status=%s",
+            vk_user_id,
+            normalized_status or "all",
+            True,
+            exc.code,
+            exc.status_code,
+        )
+        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
+    except Exception as exc:
+        logger.warning(
+            "My privileges subscription check unexpected error source=web_api vk_user_id=%s status=%s token_present=%s error_type=%s",
+            vk_user_id,
+            normalized_status or "all",
+            True,
+            type(exc).__name__,
+        )
+        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
+    if not isinstance(subscription, dict):
+        logger.warning(
+            "My privileges subscription check returned unexpected payload source=web_api vk_user_id=%s status=%s token_present=%s",
+            vk_user_id,
+            normalized_status or "all",
+            True,
+        )
+        return WEB_PRIVILEGES_EMPTY_SUBSCRIPTION_UNKNOWN_TEXT
+    logger.info(
+        "My privileges empty state resolved source=web_api vk_user_id=%s status=%s token_present=%s active_subscription=%s",
+        vk_user_id,
+        normalized_status or "all",
+        True,
+        is_web_subscription_active(subscription),
+    )
+    return format_empty_web_privileges_message(subscription)
 
 
 def extract_web_catalog_partners(payload: object) -> list[dict]:
@@ -908,13 +956,36 @@ def _coerce_bool(value: object) -> bool | None:
     return None
 
 
-def is_web_subscription_active(subscription: dict) -> bool:
+def parse_web_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    raw_value = str(value).strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def is_web_subscription_active(subscription: dict | None) -> bool:
+    if not isinstance(subscription, dict):
+        return False
     for key in ("has_active_subscription", "is_active"):
         active = _coerce_bool(subscription.get(key))
         if active is not None:
             return active
-    status = str(subscription.get("status") or "").strip().lower()
-    return status == "active"
+    status = _coerce_bool(subscription.get("status"))
+    if status is not None:
+        return status
+    for key in ("ends_at", "expires_at", "paid_until"):
+        ends_at = parse_web_datetime(subscription.get(key))
+        if ends_at is not None:
+            return ends_at > datetime.now(timezone.utc)
+    return False
 
 
 def get_web_subscription_ends_at(subscription: dict) -> str | None:
