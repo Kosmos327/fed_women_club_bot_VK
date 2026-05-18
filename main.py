@@ -35,7 +35,7 @@ from keyboards import (
     get_nav_keyboard,
     get_no_subscription_keyboard,
     get_partner_actions_keyboard,
-    get_password_setup_keyboard,
+    get_web_onboarding_keyboard,
     get_partners_keyboard,
     get_payment_request_keyboard,
     get_web_offers_keyboard,
@@ -1366,41 +1366,77 @@ def extract_web_session_from_onboard_response(response: dict) -> tuple[str | Non
     return token, user
 
 
-def build_join_club_success_text(response: dict, city_retry_without_slug: bool = False) -> str:
-    if response.get("is_new") is True:
-        first_line = "Личный кабинет создан"
+def _format_password_setup_ttl(response: dict) -> str:
+    ttl_seconds = response.get("password_setup_ttl_seconds")
+    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, (int, float)) or ttl_seconds <= 0:
+        return "60 минут"
+    ttl_minutes = max(1, round(ttl_seconds / 60))
+    return f"{ttl_minutes} минут"
+
+
+def _append_login_line(lines: list[str], login: object) -> None:
+    if isinstance(login, str) and login.strip():
+        lines.append(f"Логин: {login.strip()}")
     else:
-        first_line = "Личный кабинет уже был создан, доступ обновлён"
+        lines.append("Логин будет доступен в WEB-кабинете.")
 
+
+def build_join_club_success_text(response: dict, city_retry_without_slug: bool = False) -> str:
     password_setup_url = response.get("password_setup_url")
+    web_login_url = response.get("web_login_url")
     password_setup_required = response.get("password_setup_required") is True
-    login = response.get("login")
+    password_already_set = response.get("password_setup_required") is False
 
-    lines = [
-        first_line,
-        "",
-        "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
-        "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
-        "WEB-кабинет: доступ для бота активен.",
-        "Явная VK-привязка: через код из WEB-кабинета. "
-        "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
-    ]
+    if password_setup_required:
+        lines = ["WEB-кабинет создан"]
+    elif password_already_set:
+        lines = ["WEB-кабинет уже создан"]
+    elif response.get("is_new") is True:
+        lines = ["WEB-кабинет создан"]
+    else:
+        lines = ["WEB-кабинет уже создан"]
+
+    lines.extend(
+        [
+            "",
+            "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
+            "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
+            "WEB-кабинет: доступ для бота активен.",
+            "Явная VK-привязка: через код из WEB-кабинета. "
+            "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
+            "",
+        ]
+    )
+    _append_login_line(lines, response.get("login"))
 
     if password_setup_required and is_valid_open_link_url(password_setup_url):
         lines.extend(
             [
-                "",
-                "Чтобы входить в WEB-кабинет самостоятельно, нажмите кнопку ниже, чтобы задать пароль.",
-                "Ссылка действует 60 минут.",
+                "Придумайте пароль по ссылке ниже.",
                 "Пароль не отправляйте в VK.",
+                f"Ссылка действует {_format_password_setup_ttl(response)}.",
             ]
         )
-        if isinstance(login, str) and login.strip():
-            lines.append(f"Логин: {login.strip()}")
-    elif response.get("password_setup_required") is False:
-        lines.extend(["", "Пароль для WEB-кабинета уже установлен. Войти можно на сайте."])
+    elif password_setup_required:
+        lines.extend(
+            [
+                "Пароль не отправляйте в VK.",
+                "Ссылка для установки пароля временно недоступна. Попробуйте нажать «💗 Присоединиться к клубу» позже или войдите через WEB-кабинет, когда ссылка появится.",
+            ]
+        )
+    elif password_already_set:
+        lines.append("Пароль уже установлен.")
+        if is_valid_open_link_url(web_login_url):
+            lines.append("Открыть вход в WEB-кабинет можно по кнопке ниже.")
+        else:
+            lines.append("Войти можно на сайте bloomclub.ru.")
     else:
-        lines.extend(["", "Пароль в VK не отправляется. Вход по паролю в WEB будет подключён через безопасную установку пароля."])
+        lines.extend(
+            [
+                "Пароль не отправляйте в VK.",
+                "Статус пароля уточняется в WEB-кабинете; если нужна установка пароля, бот покажет безопасную кнопку без ссылки в тексте.",
+            ]
+        )
 
     if city_retry_without_slug:
         lines.append("Город можно будет выбрать позже в личном кабинете.")
@@ -1417,6 +1453,10 @@ def map_join_club_error(error: WebApiError) -> str:
 
 def should_show_password_setup_button(response: dict) -> bool:
     return response.get("password_setup_required") is True and is_valid_open_link_url(response.get("password_setup_url"))
+
+
+def should_show_web_login_button(response: dict) -> bool:
+    return response.get("password_setup_required") is False and is_valid_open_link_url(response.get("web_login_url"))
 
 
 def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> tuple[str, str]:
@@ -1445,8 +1485,11 @@ def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot
         return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
     set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
     keyboard = (
-        get_password_setup_keyboard(payload.get("password_setup_url"))
-        if should_show_password_setup_button(payload)
+        get_web_onboarding_keyboard(
+            password_setup_url=payload.get("password_setup_url") if should_show_password_setup_button(payload) else None,
+            web_login_url=payload.get("web_login_url") if should_show_web_login_button(payload) else None,
+        )
+        if should_show_password_setup_button(payload) or should_show_web_login_button(payload)
         else get_main_keyboard()
     )
     return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city), keyboard
