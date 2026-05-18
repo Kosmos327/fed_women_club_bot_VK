@@ -12,7 +12,7 @@ BUTTON_PAY = "💳 Оплатить / Продлить"
 BUTTON_CITY = "🌸 Выбрать город"
 BUTTON_HELP = "❓ Помощь"
 BUTTON_MAIN_MENU = "🏠 Главное меню"
-BUTTON_PASSWORD_SETUP = "Задать пароль для WEB-кабинета"
+BUTTON_PASSWORD_SETUP = "Установить новый пароль"
 BUTTON_WEB_LOGIN = "Открыть WEB-кабинет"
 
 CITIES = [
@@ -91,10 +91,10 @@ def get_password_setup_keyboard(password_setup_url: object) -> str:
 
 def get_web_onboarding_keyboard(password_setup_url: object = None, web_login_url: object = None) -> str:
     rows = []
+    if is_valid_open_link_url(web_login_url):
+        rows.append([_url_button(BUTTON_WEB_LOGIN, str(web_login_url))])
     if is_valid_open_link_url(password_setup_url):
         rows.append([_url_button(BUTTON_PASSWORD_SETUP, str(password_setup_url))])
-    elif is_valid_open_link_url(web_login_url):
-        rows.append([_url_button(BUTTON_WEB_LOGIN, str(web_login_url))])
     rows.extend(_main_keyboard_rows())
     return _keyboard(rows)
 
