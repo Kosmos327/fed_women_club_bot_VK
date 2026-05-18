@@ -954,12 +954,11 @@ def test_partners_start_restores_web_token_loads_profile_and_category_payload_ha
 
     message, keyboard_json = main.handle_partners_start(client, 6001, "bot-token")
 
-    assert message == texts.PARTNERS_INTRO_TEXT
+    assert message == texts.PARTNERS_EMPTY_TEXT
     assert get_user_state(6001)["web_catalog_city_slug"] == "cherepovets"
     assert client.profile_calls == ["restored-token"]
-    actions = [button["action"] for button in json.loads(keyboard_json)["buttons"][1:3] for button in button]
-    payloads = [json.loads(action["payload"]) for action in actions]
-    assert any(payload["category"] == "Красота" and payload["category_slug"] == "beauty" for payload in payloads)
+    assert client.catalog_calls == [{"token": "restored-token", "city_slug": "cherepovets", "category_slug": None, "q": None}]
+    assert len(json.loads(keyboard_json)["buttons"]) <= 5
 
 
 def test_partners_start_without_web_token_returns_link_instruction():
@@ -992,7 +991,7 @@ def test_category_selected_with_web_token_uses_web_api_not_legacy_and_caches_par
     assert "Beauty Partner" in message
     assert client.catalog_calls == [{"token": "client-token", "city_slug": "novosibirsk", "category_slug": "beauty", "q": None}]
     assert get_user_state(6003)["web_catalog_partners_by_id"]["11"]["name"] == "Beauty Partner"
-    assert "partner_id" in keyboard
+    assert "partner_number_selected" in keyboard
 
 
 @pytest.mark.parametrize("payload", [
@@ -1031,11 +1030,11 @@ def test_new_onboarded_bound_active_user_opens_partners_without_generic_error():
 
     message, keyboard_json = main.handle_partners_start(client, 6010, "bot-token")
 
-    assert message == texts.PARTNERS_INTRO_TEXT
+    assert message == texts.PARTNERS_EMPTY_TEXT
     assert "Произошла ошибка" not in message
     assert client.profile_calls == ["client-token"]
     assert get_user_state(6010)["web_catalog_city_slug"] == "novosibirsk"
-    assert "category_selected" in keyboard_json
+    assert len(json.loads(keyboard_json)["buttons"]) <= 5
 
 
 def test_empty_web_catalog_returns_city_empty_state_message():
@@ -1284,11 +1283,13 @@ def test_web_partner_selected_loads_offers_and_caches_without_legacy_services():
     message, keyboard_json = main.handle_web_partner_selected(client, 7001, "bot-token", 11)
 
     assert "Beauty Partner" in message
-    assert "Выберите предложение" in message
+    assert "Привилегии:" in message
+    assert "Скидка на уход" in message
     assert client.offers_calls == [{"token": "client-token", "partner_id": 11}]
     assert get_user_state(7001)["web_partner_offers_by_partner_id"]["11"][0]["title"] == "Скидка на уход"
-    payloads = [json.loads(button["action"]["payload"]) for row in json.loads(keyboard_json)["buttons"] for button in row]
-    assert {"action": "web_offer_selected", "partner_id": 11, "offer_id": 5} in payloads
+    payloads = [json.loads(button["action"]["payload"]) for row in json.loads(keyboard_json)["buttons"] for button in row if button["action"].get("payload")]
+    assert {"action": "web_get_privilege", "partner_id": 11} in payloads
+    assert len(json.loads(keyboard_json)["buttons"]) <= 5
 
 
 def test_web_partner_offer_response_wrappers_are_supported():
@@ -1307,10 +1308,8 @@ def test_web_offer_selected_calls_verify_endpoint_and_formats_code():
     message, _keyboard = main.handle_web_offer_selected(client, 7002, "bot-token", 11, 5)
 
     assert client.verification_calls == [{"token": "client-token", "partner_id": 11, "offer_id": 5}]
-    assert "🎁 Код привилегии: ABC-777" in message
-    assert "Партнёр: Beauty Partner" in message
-    assert "Предложение: Скидка на уход" in message
-    assert "Действует до: 01.06.2026" in message
+    assert "Ваш код привилегии:" in message
+    assert "ABC-777" in message
     assert "Покажите этот код партнёру" in message
 
 
@@ -1319,8 +1318,7 @@ def test_web_created_verification_wrappers_are_supported(wrapper_key):
     message = main.format_web_created_verification_message({wrapper_key: {"code": "WRAP-1", "partner_name": "Partner", "offer_title": "Offer"}})
 
     assert "WRAP-1" in message
-    assert "Partner" in message
-    assert "Offer" in message
+    assert "Ваш код привилегии:" in message
 
 
 def test_web_offer_without_token_returns_link_required_text():
@@ -1344,7 +1342,7 @@ def test_web_verify_no_subscription_returns_pay_instruction():
 
     message, keyboard_json = main.handle_web_offer_selected(client, 7004, "bot-token", 11, 5)
 
-    assert "Для получения привилегии нужна активная подписка" in message
+    assert "Подписка пока не активна" in message
     assert "Оплатить / Продлить" in keyboard_json
 
 
@@ -1561,3 +1559,104 @@ def test_web_payment_errors_return_safe_texts_without_raw_detail():
 
     assert "WEB-кабинет" in main.map_web_payment_error_to_text(WebApiError("unauthenticated", status_code=401))
     assert main.map_web_payment_error_to_text(WebApiError("not_found", status_code=404)) == texts.PAYMENT_WEB_NOT_FOUND_TEXT
+
+
+class _FakeMessages:
+    def __init__(self):
+        self.calls = []
+
+    def send(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class _FakeVkApi:
+    def __init__(self):
+        self.messages = _FakeMessages()
+
+
+def test_send_message_replaces_invalid_keyboard_with_safe_fallback(monkeypatch):
+    vk_api = _FakeVkApi()
+    invalid_keyboard = json.dumps({"buttons": [[], [], [], [], [], []]})
+
+    main.send_message(vk_api, 1, "test", invalid_keyboard)
+
+    sent_keyboard = vk_api.messages.calls[0]["keyboard"]
+    assert keyboards.is_valid_keyboard(sent_keyboard)
+    assert "✨ Партнёры и скидки" in sent_keyboard
+
+
+def test_send_message_omits_keyboard_when_fallback_is_invalid(monkeypatch):
+    vk_api = _FakeVkApi()
+    invalid_keyboard = json.dumps({"buttons": [[], [], [], [], [], []]})
+    monkeypatch.setattr(main, "get_safe_fallback_keyboard", lambda: invalid_keyboard)
+
+    main.send_message(vk_api, 1, "test", invalid_keyboard)
+
+    assert "keyboard" not in vk_api.messages.calls[0]
+
+
+def test_partners_start_with_three_partners_shows_numbered_catalog_and_cache():
+    reset_user_state(8001)
+    state = get_user_state(8001)
+    state["web_client_token"] = "client-token"
+    state["selected_city"] = "Новосибирск"
+    client = PartnersClient(
+        profile={"selected_city_slug": "novosibirsk"},
+        partners=[
+            {"id": 1, "title": "Golden Apple", "category": "Красота", "offers": [{"title": "скидка 10%"}]},
+            {"id": 2, "name": "Fit Studio", "category_name": "Спорт", "benefits": ["пробная тренировка бесплатно"]},
+            {"id": 3, "partner_name": "Coffee Rose", "category_title": "Кафе", "privileges": ["десерт в подарок"]},
+        ],
+    )
+
+    message, keyboard_json = main.handle_partners_start(client, 8001, "bot-token")
+
+    assert "✨ Партнёры и скидки" in message
+    assert "1. Golden Apple" in message
+    assert "2. Fit Studio" in message
+    assert "3. Coffee Rose" in message
+    assert get_user_state(8001)["web_catalog_number_to_partner_id"] == {"1": "1", "2": "2", "3": "3"}
+    labels = [button["action"]["label"] for row in json.loads(keyboard_json)["buttons"] for button in row]
+    assert labels[:3] == ["1", "2", "3"]
+    assert len(json.loads(keyboard_json)["buttons"]) <= 5
+
+
+def test_web_partner_card_uses_flexible_fields_and_skips_empty_values():
+    partner = {
+        "id": 1,
+        "title": "Golden Apple",
+        "category_name": "Красота",
+        "city_title": "Новосибирск",
+        "actual_address": "ул. Примерная, 10",
+        "phone": "+7 999 000-00-00",
+        "website": "https://example.ru",
+        "vk_url": "https://vk.com/example",
+        "telegram_url": "https://t.me/example",
+        "contact_email": "example@mail.ru",
+        "social_links": {"instagram": "https://instagram.com/example"},
+        "offers": [{"title": "Скидка 10% на покупку", "conditions": "Покажите карту."}],
+        "empty": "",
+    }
+
+    message = main.format_web_partner_card(partner, {"selected_city": "Новосибирск"})
+
+    assert "🌸 Golden Apple" in message
+    assert "Категория: Красота" in message
+    assert "Город: Новосибирск" in message
+    assert "ул. Примерная, 10" in message
+    assert "Телефон: +7 999 000-00-00" in message
+    assert "Сайт: https://example.ru" in message
+    assert "VK: https://vk.com/example" in message
+    assert "Telegram: https://t.me/example" in message
+    assert "Email: example@mail.ru" in message
+    assert "Скидка 10% на покупку" in message
+    assert "Покажите карту." in message
+    assert "empty" not in message
+
+
+def test_stale_partner_number_returns_safe_fallback_text():
+    reset_user_state(8002)
+    state = get_user_state(8002)
+    assert (state.get("web_catalog_number_to_partner_id") or {}).get("9") is None
+    assert main.PARTNER_CACHE_STALE_TEXT == "Данные устарели. Откройте список партнёров заново."
+    assert keyboards.is_valid_keyboard(main.get_partner_stale_keyboard(8002))

@@ -35,6 +35,14 @@ from keyboards import (
     get_nav_keyboard,
     get_no_subscription_keyboard,
     get_partner_actions_keyboard,
+    get_partner_card_keyboard,
+    get_partner_catalog_keyboard,
+    get_empty_catalog_keyboard,
+    get_privilege_no_subscription_keyboard,
+    get_privilege_success_keyboard,
+    get_safe_fallback_keyboard,
+    get_stale_catalog_keyboard,
+    is_valid_keyboard,
     get_web_onboarding_keyboard,
     get_partners_keyboard,
     get_payment_request_keyboard,
@@ -119,12 +127,22 @@ def normalize_text(text: Optional[str]) -> str:
 
 
 def send_message(vk_api, peer_id: int, text: str, keyboard: Optional[str] = None) -> None:
-    vk_api.messages.send(
-        peer_id=peer_id,
-        message=text,
-        random_id=random.randint(1, 2_147_483_647),
-        keyboard=keyboard or get_main_keyboard(),
-    )
+    safe_keyboard = keyboard or get_main_keyboard()
+    if not is_valid_keyboard(safe_keyboard):
+        logger.warning("Invalid VK keyboard detected peer_id=%s; using safe fallback keyboard", peer_id)
+        safe_keyboard = get_safe_fallback_keyboard()
+    if not is_valid_keyboard(safe_keyboard):
+        logger.warning("Safe fallback VK keyboard is invalid peer_id=%s; sending message without keyboard", peer_id)
+        safe_keyboard = None
+
+    kwargs = {
+        "peer_id": peer_id,
+        "message": text,
+        "random_id": random.randint(1, 2_147_483_647),
+    }
+    if safe_keyboard is not None:
+        kwargs["keyboard"] = safe_keyboard
+    vk_api.messages.send(**kwargs)
 
 
 def extract_action(message: dict) -> tuple[str | None, dict]:
@@ -201,9 +219,7 @@ def log_partner_payload_guard(
 
 
 def get_partner_stale_keyboard(vk_user_id: int | str) -> str:
-    state = get_user_state(int(vk_user_id))
-    categories = state.get("categories") or list(WEB_PARTNER_CATEGORIES)
-    return get_categories_keyboard(categories)
+    return get_stale_catalog_keyboard()
 
 
 def format_user_date(value: str | None) -> str:
@@ -578,30 +594,181 @@ def _format_partner_benefit(partner: dict) -> str | None:
     return None
 
 
-def format_web_partner_compact(partner: dict) -> str:
-    lines = [str(partner.get("name") or "Партнёр").strip()]
-    category = partner.get("category_title") or partner.get("category") or get_web_partner_category_label(partner.get("category_slug"))
-    if _is_filled(category):
+def _first_filled(mapping: dict, keys: tuple[str, ...]) -> object:
+    for key in keys:
+        value = mapping.get(key)
+        if _is_filled(value):
+            return value
+    return None
+
+
+def _stringify_contact_value(value: object) -> list[str]:
+    if not _is_filled(value):
+        return []
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_stringify_contact_value(item))
+        return result
+    if isinstance(value, dict):
+        result = []
+        for key, item in value.items():
+            if _is_filled(item):
+                label = str(key).replace("_", " ").strip().title()
+                result.append(f"{label}: {item}" if label else str(item))
+        return result
+    return [str(value).strip()]
+
+
+def get_partner_title(partner: dict) -> str:
+    return str(_first_filled(partner, ("title", "name", "partner_name")) or "Партнёр").strip()
+
+
+def get_partner_category_text(partner: dict) -> str | None:
+    category = _first_filled(partner, ("category", "category_name", "category_title"))
+    if isinstance(category, dict):
+        category = _first_filled(category, ("title", "name", "label"))
+    return str(category).strip() if _is_filled(category) else get_web_partner_category_label(partner.get("category_slug"))
+
+
+def get_partner_city_text(partner: dict, state: dict | None = None) -> str | None:
+    city = _first_filled(partner, ("city", "city_name", "city_title", "city_slug"))
+    if isinstance(city, dict):
+        city = _first_filled(city, ("title", "name", "slug"))
+    if _is_filled(city):
+        return str(city).strip()
+    selected_city = (state or {}).get("selected_city")
+    return str(selected_city).strip() if _is_filled(selected_city) else None
+
+
+def get_partner_address_text(partner: dict) -> str | None:
+    address = _first_filled(partner, ("address", "location", "actual_address"))
+    if isinstance(address, dict):
+        address = _first_filled(address, ("address", "title", "name", "value"))
+    return str(address).strip() if _is_filled(address) else None
+
+
+def get_partner_web_url(partner: dict) -> str | None:
+    for key in ("card_url", "web_url", "detail_url", "website", "site", "url"):
+        value = partner.get(key)
+        if is_valid_open_link_url(value):
+            return str(value).strip()
+    return None
+
+
+def extract_partner_contacts(partner: dict) -> list[str]:
+    contacts: list[str] = []
+    contact_fields = (
+        ("Телефон", ("phone", "phones", "contact_phone")),
+        ("Сайт", ("website", "site", "url")),
+        ("VK", ("vk", "vk_url")),
+        ("Telegram", ("telegram", "telegram_url")),
+        ("Email", ("email", "contact_email")),
+    )
+    for label, keys in contact_fields:
+        value = _first_filled(partner, keys)
+        for item in _stringify_contact_value(value):
+            contacts.append(f"{label}: {item}")
+    for key in ("contacts", "social_links", "links"):
+        value = partner.get(key)
+        contacts.extend(_stringify_contact_value(value))
+    return list(dict.fromkeys(contact for contact in contacts if contact.strip()))
+
+
+def _offer_text(offer: dict) -> str | None:
+    for key in ("benefit_text", "discount_text", "title", "name", "description"):
+        if _is_filled(offer.get(key)):
+            return str(offer.get(key)).strip()
+    if _is_filled(offer.get("discount_percent")):
+        return f"Скидка {format_discount_percent(offer.get('discount_percent'))}"
+    return None
+
+
+def extract_partner_offers(partner: dict, cached_offers: list[dict] | None = None) -> list[str]:
+    offers: list[str] = []
+    raw_sources = []
+    if cached_offers:
+        raw_sources.extend(cached_offers)
+    for key in ("offers", "benefits", "privileges", "discounts", "active_offers"):
+        value = partner.get(key)
+        if isinstance(value, list):
+            raw_sources.extend(item for item in value if isinstance(item, dict))
+            offers.extend(str(item).strip() for item in value if _is_filled(item) and not isinstance(item, dict))
+        elif isinstance(value, dict):
+            raw_sources.append(value)
+        elif _is_filled(value):
+            offers.append(str(value).strip())
+    for offer in raw_sources:
+        text = _offer_text(offer)
+        if text:
+            offers.append(text)
+    direct = _format_partner_benefit(partner)
+    if direct:
+        offers.append(direct)
+    return list(dict.fromkeys(offer for offer in offers if offer.strip()))
+
+
+def extract_partner_conditions(partner: dict, cached_offers: list[dict] | None = None) -> str:
+    for source in (partner, *(cached_offers or []), _extract_first_offer(partner) or {}):
+        if not isinstance(source, dict):
+            continue
+        value = _first_filled(source, ("conditions", "terms", "rules"))
+        if _is_filled(value):
+            return str(value).strip()
+    return "Покажите код сотруднику партнёра перед оплатой."
+
+
+def format_web_partner_compact(partner: dict, index: int | None = None) -> str:
+    prefix = f"{index}. " if index is not None else ""
+    lines = [f"{prefix}{get_partner_title(partner)}"]
+    category = get_partner_category_text(partner)
+    if category:
         lines.append(f"Категория: {category}")
-    address = partner.get("address") or partner.get("city_name")
-    if _is_filled(address):
-        lines.append(f"Адрес/город: {address}")
-    description = _truncate_text(partner.get("description"))
-    if description:
-        lines.extend(["", description])
-    if partner.get("is_verified") is True:
-        lines.append("✅ Проверенный партнёр")
     benefit = _format_partner_benefit(partner)
     if benefit:
-        lines.append(f"Выгода: {benefit}")
+        lines.append(f"Привилегия: {benefit}")
     return "\n".join(lines)
 
 
-def format_web_partners_list(partners: list[dict]) -> str:
+def format_web_partners_list(partners: list[dict], city: str | None = None) -> str:
     if not partners:
         return PARTNERS_EMPTY_TEXT
-    return "\n\n".join(format_web_partner_compact(partner) for partner in partners[:10])
+    lines = ["✨ Партнёры и скидки"]
+    if city:
+        lines.append(f"Город: {city}")
+    lines.append("")
+    lines.append("\n\n".join(format_web_partner_compact(partner, index) for index, partner in enumerate(partners, 1)))
+    return "\n".join(lines)
 
+
+def format_web_partner_card(partner: dict, state: dict | None = None, cached_offers: list[dict] | None = None) -> str:
+    lines = [f"🌸 {get_partner_title(partner)}", ""]
+    category = get_partner_category_text(partner)
+    city = get_partner_city_text(partner, state)
+    if category:
+        lines.append(f"Категория: {category}")
+    if city:
+        lines.append(f"Город: {city}")
+    address = get_partner_address_text(partner)
+    if address:
+        lines.extend(["", "Адрес:", address])
+    contacts = extract_partner_contacts(partner)
+    if contacts:
+        lines.extend(["", "Контакты:", *contacts])
+    offers = extract_partner_offers(partner, cached_offers)
+    if offers:
+        lines.extend(["", "Привилегии:", *(f"• {offer}" for offer in offers)])
+    lines.extend(["", "Условия:", extract_partner_conditions(partner, cached_offers)])
+    return "\n".join(lines)
+
+
+def _cache_current_partner_page(state: dict, page_partners: list[dict]) -> None:
+    number_map = {}
+    for index, partner in enumerate(page_partners, 1):
+        partner_id = normalize_payload_id(partner.get("id"))
+        if partner_id is not None:
+            number_map[str(index)] = partner_id
+    state["web_catalog_number_to_partner_id"] = number_map
 
 def _cache_web_catalog_partners(state: dict, partners: list[dict], city_slug: str | None, category_slug: str | None) -> None:
     partners_by_id = {}
@@ -653,16 +820,14 @@ def extract_web_verification(payload: object) -> dict:
 def format_web_created_verification_message(payload: object, partner: dict | None = None, offer: dict | None = None) -> str:
     verification = extract_web_verification(payload)
     code_item = map_web_verification_to_code_item(verification)
-    partner = partner or {}
-    offer = offer or {}
-    if not _is_filled(code_item.get("partner_name")) and _is_filled(partner.get("name")):
-        code_item["partner_name"] = partner.get("name")
-    if not _is_filled(code_item.get("service_title")) and _is_filled(offer.get("title") or offer.get("name")):
-        code_item["service_title"] = offer.get("title") or offer.get("name")
-    return (
-        f"{format_code_item(code_item)}\n\n"
-        "Покажите этот код партнёру перед оплатой/получением услуги."
+    code = (
+        code_item.get("dynamic_code")
+        or code_item.get("code")
+        or verification.get("dynamic_code")
+        or verification.get("code")
+        or "—"
     )
+    return f"Ваш код привилегии:\n\n{code}\n\nПокажите этот код партнёру перед оплатой."
 
 
 def _is_no_subscription_error(error: WebApiError) -> bool:
@@ -672,13 +837,36 @@ def _is_no_subscription_error(error: WebApiError) -> bool:
 
 def map_web_partner_privilege_error_to_text(error: WebApiError) -> str:
     if _is_no_subscription_error(error):
-        return "Для получения привилегии нужна активная подписка."
+        return "Подписка пока не активна.\n\nОформите подписку, чтобы получать коды привилегий у партнёров."
     if error.code == "not_found" or error.status_code == 404:
         return "Партнёр или предложение недоступны."
     if error.code in {"unauthenticated", "forbidden"} or error.status_code in {401, 403}:
         return PARTNERS_WEB_LINK_REQUIRED_TEXT
     return "Не удалось получить привилегию. Попробуйте позже или откройте главное меню."
 
+
+
+def _current_catalog_page(state: dict) -> tuple[list[dict], int, bool]:
+    partners = state.get("last_partners") if isinstance(state.get("last_partners"), list) else []
+    offset = int(state.get("web_catalog_offset") or 0)
+    page = [partner for partner in partners[offset : offset + 5] if isinstance(partner, dict)]
+    has_more = offset + len(page) < len(partners)
+    _cache_current_partner_page(state, page)
+    return page, offset, has_more
+
+
+def _format_current_catalog_page(state: dict) -> tuple[str, str]:
+    page, offset, has_more = _current_catalog_page(state)
+    if not page:
+        return PARTNERS_EMPTY_TEXT, get_empty_catalog_keyboard()
+    city = state.get("selected_city") or state.get("web_catalog_city_slug")
+    numbered = list(enumerate(page, offset + 1))
+    lines = ["✨ Партнёры и скидки"]
+    if city:
+        lines.append(f"Город: {city}")
+    lines.append("")
+    lines.append("\n\n".join(format_web_partner_compact(partner, number) for number, partner in numbered))
+    return "\n".join(lines), get_partner_catalog_keyboard(len(page), has_more=has_more)
 
 def handle_web_partner_selected(
     web_client: WebApiClient,
@@ -689,7 +877,7 @@ def handle_web_partner_selected(
     partner_key = normalize_payload_id(partner_id)
     if partner_key is None:
         log_partner_payload_guard("web_partner_selected", vk_user_id, partner_id, id_parse_result="missing_partner_id")
-        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+        return PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(vk_user_id)
 
     is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
     token = get_web_client_token(vk_user_id)
@@ -705,10 +893,13 @@ def handle_web_partner_selected(
     partner_int_id = safe_int_id(partner_key)
     if partner_int_id is None:
         log_partner_payload_guard("web_partner_selected", vk_user_id, partner_key, id_parse_result="partner_id_not_int")
-        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+        return PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(vk_user_id)
 
+    offers: list[dict] = []
     try:
         payload = web_client.get_client_partner_offers(token, partner_int_id)
+        offers = extract_web_partner_offers(payload)
+        _cache_web_partner_offers(state, partner_int_id, offers)
     except WebApiError as exc:
         logger.warning(
             "Partner offers WEB API error source=web_api vk_user_id=%s partner_id=%s token_present=%s code=%s http_status=%s",
@@ -718,18 +909,9 @@ def handle_web_partner_selected(
             exc.code,
             exc.status_code,
         )
-        text = map_web_partner_privilege_error_to_text(exc)
-        keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
-        return text, keyboard
     log_partner_payload_guard("web_partner_selected", vk_user_id, partner_key, id_parse_result="partner_id_int")
-    offers = extract_web_partner_offers(payload)
-    _cache_web_partner_offers(state, partner_int_id, offers)
     state["last_partner_id"] = partner_int_id
-    detail = format_web_partner_compact(partner)
-    if offers:
-        return f"{detail}\n\nВыберите предложение:", get_web_offers_keyboard(partner_int_id, offers)
-    return f"{detail}\n\nУ партнёра пока нет активных предложений.", get_web_partner_actions_keyboard(partner_int_id)
-
+    return format_web_partner_card(partner, state, offers), get_partner_card_keyboard(partner_int_id, get_partner_web_url(partner))
 
 def handle_web_offer_selected(
     web_client: WebApiClient,
@@ -791,10 +973,10 @@ def handle_web_offer_selected(
             exc.status_code,
         )
         text = map_web_partner_privilege_error_to_text(exc)
-        keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
+        keyboard = get_privilege_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
         return text, keyboard
     log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "ids_int")
-    return format_web_created_verification_message(payload, partner=partner, offer=offer), get_verify_success_keyboard()
+    return format_web_created_verification_message(payload, partner=partner, offer=offer), get_privilege_success_keyboard(partner_int_id)
 
 
 def handle_partners_start(web_client: WebApiClient, vk_user_id: int | str, bot_token: str) -> tuple[str, str]:
@@ -826,8 +1008,19 @@ def handle_partners_start(web_client: WebApiClient, vk_user_id: int | str, bot_t
     if not city_slug:
         log_web_catalog_error("partners_start_city", vk_user_id, "/api/v1/clients/catalog/partners", None, "missing_city_slug")
         return PARTNERS_CITY_REQUIRED_TEXT, get_city_keyboard()
-    return PARTNERS_INTRO_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
-
+    try:
+        payload = web_client.get_client_catalog_partners(token, city_slug=city_slug)
+    except WebApiError as exc:
+        log_web_catalog_error("partners_start", vk_user_id, "/api/v1/clients/catalog/partners", exc.status_code, exc.code, city_slug)
+        return PARTNERS_WEB_UNAVAILABLE_TEXT, get_empty_catalog_keyboard()
+    except Exception as exc:
+        log_web_catalog_error("partners_start", vk_user_id, "/api/v1/clients/catalog/partners", None, type(exc).__name__, city_slug)
+        return PARTNERS_WEB_UNAVAILABLE_TEXT, get_empty_catalog_keyboard()
+    partners = extract_web_catalog_partners(payload)
+    _cache_web_catalog_partners(state, partners, city_slug, None)
+    state["last_partners"] = partners
+    state["web_catalog_offset"] = 0
+    return _format_current_catalog_page(state)
 
 def handle_category_selected(
     web_client: WebApiClient,
@@ -878,12 +1071,15 @@ def handle_category_selected(
         partners = extract_web_catalog_partners(payload)
         _cache_web_catalog_partners(state, partners, city_slug, requested_slug)
         state["last_partners"] = partners
-        return format_web_partners_list(partners), get_partners_keyboard(partners, category)
+        state["web_catalog_offset"] = 0
+        return _format_current_catalog_page(state)
 
     if gateway is None:
         return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
     partners = gateway.get_partners(category=None if category == "all" else category)
     state["last_partners"] = partners
+    state["web_catalog_offset"] = 0
+    _cache_current_partner_page(state, partners[:5])
     message_text = PARTNERS_FOUND_TEXT if partners else PARTNERS_EMPTY_TEXT
     return message_text, get_partners_keyboard(partners, category)
 
@@ -1632,7 +1828,18 @@ def main() -> None:
                         city = str(payload.get("city"))
                         # TODO: when WEB/CRM exposes selected_city endpoint, sync this value via BackendGateway.
                         state["selected_city"] = city
+                        state["selected_city_slug"] = get_web_known_city_slug(city)
                         send_message(vk_api, peer_id, format_city_selected_message(city), get_city_selected_keyboard())
+                        message_text, keyboard = handle_partners_start(web_client, from_id, config.bot_api_token)
+                        send_message(vk_api, peer_id, message_text, keyboard)
+                        continue
+                    if action == "city_other":
+                        send_message(vk_api, peer_id, "Пока в VK-каталоге доступен быстрый выбор Новосибирска. Для другого города откройте WEB-кабинет или вернитесь в меню.", get_city_keyboard())
+                        continue
+                    if action == "partners_more":
+                        state["web_catalog_offset"] = int(state.get("web_catalog_offset") or 0) + 5
+                        message_text, keyboard = _format_current_catalog_page(state)
+                        send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "partners" or text == normalize_text(BUTTON_PARTNERS):
                         message_text, keyboard = handle_partners_start(web_client, from_id, config.bot_api_token)
@@ -1684,6 +1891,15 @@ def main() -> None:
                     if action == "web_get_privilege":
                         partner_id = payload.get("partner_id") or state.get("last_partner_id")
                         message_text, keyboard = handle_web_offer_selected(web_client, from_id, config.bot_api_token, partner_id, None)
+                        send_message(vk_api, peer_id, message_text, keyboard)
+                        continue
+                    if action == "partner_number_selected":
+                        number = normalize_payload_id(payload.get("number"))
+                        partner_id = (state.get("web_catalog_number_to_partner_id") or {}).get(number or "")
+                        if partner_id is None:
+                            send_message(vk_api, peer_id, PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(from_id))
+                            continue
+                        message_text, keyboard = handle_web_partner_selected(web_client, from_id, config.bot_api_token, partner_id)
                         send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)

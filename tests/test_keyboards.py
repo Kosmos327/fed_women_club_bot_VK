@@ -1,5 +1,7 @@
 import json
 
+import keyboards
+
 from keyboards import (
     BUTTON_PASSWORD_SETUP,
     BUTTON_WEB_LOGIN,
@@ -52,16 +54,16 @@ def test_categories_match_women_club_list():
         "Цветы / подарки",
         "Другое",
     ]
-    for category in WOMEN_CATEGORIES:
-        assert category in labels
+    assert labels == ["Все категории", "Красота", "Маникюр / педикюр", "Сменить город", "🏠 Главное меню"]
+    assert len(json.loads(get_categories_keyboard())["buttons"]) <= 5
 
 
-def test_city_keyboard_contains_five_mvp_cities():
+def test_city_keyboard_is_compact_for_vk_limits():
     labels = _labels(get_city_keyboard())
 
     assert CITIES == ["Новосибирск", "Москва", "Санкт-Петербург", "Екатеринбург", "Казань"]
-    for city in CITIES:
-        assert city in labels
+    assert labels == ["Новосибирск", "Другой город", "Назад в меню"]
+    assert len(json.loads(get_city_keyboard())["buttons"]) <= 5
 
 
 def _actions(keyboard_json: str) -> list[dict]:
@@ -109,3 +111,16 @@ def test_web_onboarding_keyboard_skips_invalid_web_login_url():
 
     assert _labels(keyboard) == _labels(get_main_keyboard())
     assert all(action["type"] == "text" for action in _actions(keyboard))
+
+
+def _row_count(keyboard_json: str) -> int:
+    return len(json.loads(keyboard_json)["buttons"])
+
+
+def test_vk_keyboard_builders_keep_safe_row_limit():
+    assert _row_count(get_main_keyboard()) <= 5
+    assert _row_count(get_city_keyboard()) <= 5
+    assert _row_count(keyboards.get_partner_catalog_keyboard(5, has_more=True)) <= 5
+    assert _row_count(keyboards.get_partner_card_keyboard(1, "https://example.com")) <= 5
+    assert _row_count(keyboards.get_empty_catalog_keyboard()) <= 5
+    assert _row_count(keyboards.get_safe_fallback_keyboard()) <= 5
