@@ -103,6 +103,8 @@ from vk_attachments import extract_attachment_url
 logger = logging.getLogger("vk_bot")
 logging.basicConfig(level=logging.INFO)
 
+SUBSCRIPTION_PRICE_RUB = 349
+
 
 def normalize_text(text: Optional[str]) -> str:
     return (text or "").strip().lower()
@@ -697,10 +699,33 @@ def format_web_payment_status(status: object) -> str:
     return WEB_PAYMENT_STATUS_LABELS.get(raw_status, raw_status or "—")
 
 
-def format_web_payment_request(payment: dict) -> str:
+def _is_zero_amount(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    try:
+        return Decimal(str(value).strip()) == 0
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
+def format_web_payment_amount(amount: object, fallback_amount: object | None = SUBSCRIPTION_PRICE_RUB) -> str:
+    if fallback_amount is not None:
+        if _is_zero_amount(amount):
+            return format_money(fallback_amount)
+        try:
+            if Decimal(str(amount).strip()) == Decimal(str(fallback_amount)):
+                return format_money(fallback_amount)
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+    return str(amount or "—")
+
+
+def format_web_payment_request(payment: dict, fallback_amount: object | None = SUBSCRIPTION_PRICE_RUB) -> str:
     lines = [
         f"ID заявки: {payment.get('id') or '—'}",
-        f"Сумма: {payment.get('amount') or '—'}",
+        f"Сумма: {format_web_payment_amount(payment.get('amount'), fallback_amount=fallback_amount)}",
         f"Статус: {format_web_payment_status(payment.get('status'))}",
         f"Создана: {format_user_date(payment.get('created_at'))}",
     ]
@@ -777,7 +802,9 @@ def handle_web_payment_request(web_client: WebApiClient, vk_user_id: int, bot_to
         )
         return PAYMENT_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
     try:
-        payment = web_client.create_client_payment_request(token, amount=None, source="vk", comment=None)
+        payment = web_client.create_client_payment_request(
+            token, amount=SUBSCRIPTION_PRICE_RUB, source="vk", comment=None
+        )
     except WebApiError as exc:
         logger.warning(
             "Payment request failed source=web_api vk_user_id=%s payment_request_id=%s token_present=%s status=%s code=%s",
