@@ -268,190 +268,299 @@ class JoinCityRetryClient:
         return {"access_token": "client-token", "user": {"id": 10}, "is_new": True}
 
 
-def test_join_success_new_user_text_contains_created_and_stores_token():
+def test_join_success_new_user_text_contains_login_temporary_password_and_open_button():
     reset_user_state(3001)
-    client = JoinSuccessClient()
+    login = "user@example.com"
+    temporary_password = "tmp-pass-123"
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10, "email": login},
+            "client": {"id": 20},
+            "is_new": True,
+            "login": login,
+            "temporary_password": temporary_password,
+            "password_hash": "must-not-leak",
+        }
+    )
 
-    message = main.handle_join_club(client, 3001, "bot-token", selected_city="Новосибирск")
+    message, keyboard = main.handle_join_club_result(client, 3001, "bot-token", selected_city="Новосибирск")
 
-    assert "WEB-кабинет создан" in message
-    assert "Пароль не отправляйте в VK" in message
-    assert "WEB-" + "привязка: активна" not in message
-    assert "WEB-кабинет: доступ для бота активен" in message
-    assert "Привязать КОД" in message
-    assert "код из WEB-кабинета" in message
+    assert message == (
+        "💗 WEB-кабинет создан\n"
+        "\n"
+        "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.\n"
+        "\n"
+        "Ваши данные для входа:\n"
+        f"Логин: {login}\n"
+        f"Пароль: {temporary_password}\n"
+        "\n"
+        "Сохраните эти данные.\n"
+        "\n"
+        "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты."
+    )
+    assert login in message
+    assert temporary_password in message
+    assert "password_hash" not in message
+    assert "must-not-leak" not in message
+    actions = _keyboard_actions(keyboard)
+    assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
+    assert "Установить новый пароль" not in _keyboard_labels(keyboard)
     assert get_web_client_token(3001) == "client-token"
-    assert get_user_state(3001)["web_client_user"]["email"] == "user@example.com"
+    assert get_user_state(3001)["web_client_user"]["email"] == login
     assert client.calls[0]["selected_city_slug"] == "novosibirsk"
+    assert "temporary_password" not in get_user_state(3001)
+    assert "password_hash" not in get_user_state(3001)
 
 
-def test_join_success_existing_user_text_contains_already_created():
+def test_join_success_existing_user_text_contains_login_and_setup_button():
     reset_user_state(3002)
-    client = JoinSuccessClient(payload={"access_token": "client-token", "user": {"id": 10}, "is_new": False})
-
-    message = main.handle_join_club(client, 3002, "bot-token")
-
-    assert "WEB-кабинет уже создан" in message
-    assert "WEB-" + "привязка: активна" not in message
-    assert "WEB-кабинет" in message
-    assert "Привязать КОД" in message
-    assert get_web_client_token(3002) == "client-token"
-
-
-def test_join_success_with_password_setup_url_adds_safe_setup_instructions():
-    reset_user_state(3006)
-    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
+    login = "user@example.com"
+    setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
-            "client": {"id": 20},
-            "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": password_setup_url,
-            "login": "user@example.com",
+            "is_new": False,
+            "login": login,
+            "temporary_password": None,
+            "password_setup_url": setup_url,
+            "password_hash": "must-not-leak",
         }
     )
 
-    message = main.handle_join_club(client, 3006, "bot-token")
+    message, keyboard = main.handle_join_club_result(client, 3002, "bot-token")
 
-    assert "WEB-кабинет создан" in message
-    assert "Придумайте пароль по ссылке ниже" in message
-    assert "Ссылка действует 60 минут" in message
-    assert "Пароль не отправляйте в VK" in message
-    assert "Логин: user@example.com" in message
-    assert "Пароль уже установлен" not in message
-    assert password_setup_url not in message
-    assert "password_setup_url" not in get_user_state(3006)
-    assert get_web_client_token(3006) == "client-token"
+    assert message == (
+        "💗 WEB-кабинет уже создан\n"
+        "\n"
+        "Вы можете войти на bloomclub.ru.\n"
+        "\n"
+        f"Логин: {login}\n"
+        "\n"
+        "Пароль уже был установлен ранее. Если вы его не помните, установите новый пароль по кнопке ниже."
+    )
+    assert login in message
+    assert "temporary_password" not in message
+    assert "password_hash" not in message
+    assert "must-not-leak" not in message
+    actions = _keyboard_actions(keyboard)
+    assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
+    assert actions[1] == {"type": "open_link", "label": "Установить новый пароль", "link": setup_url}
+    assert get_web_client_token(3002) == "client-token"
+    assert "temporary_password" not in get_user_state(3002)
+    assert "password_hash" not in get_user_state(3002)
 
 
-def test_join_success_ignores_non_string_password_setup_url_without_breaking_session():
+def test_join_success_existing_user_uses_setup_password_url_alias():
+    reset_user_state(3006)
+    setup_url = "https://bloomclub.ru/password/setup?token=alias-token"
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": False,
+            "login": "user@example.com",
+            "temporary_password": None,
+            "setup_password_url": setup_url,
+        }
+    )
+
+    _message, keyboard = main.handle_join_club_result(client, 3006, "bot-token")
+
+    assert {"type": "open_link", "label": "Установить новый пароль", "link": setup_url} in _keyboard_actions(keyboard)
+
+
+def test_join_success_backward_compatible_missing_temporary_password_is_safe_fallback():
     reset_user_state(3007)
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
             "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": {"token": "not-a-url-string"},
             "login": "user@example.com",
+            "password_hash": "must-not-leak",
         }
     )
 
-    message = main.handle_join_club(client, 3007, "bot-token")
+    message, keyboard = main.handle_join_club_result(client, 3007, "bot-token")
 
-    assert "WEB-кабинет создан" in message
-    assert "Ссылка для установки пароля временно недоступна" in message
-    assert "Задать пароль для WEB-кабинета" not in message
-    assert "not-a-url-string" not in message
+    assert "💗 WEB-кабинет уже создан" in message
+    assert "Логин: user@example.com" in message
+    assert "Пароль:" not in message
+    assert "temporary_password" not in message
+    assert "password_hash" not in message
+    assert "must-not-leak" not in message
+    assert "Открыть WEB-кабинет" in _keyboard_labels(keyboard)
     assert get_web_client_token(3007) == "client-token"
 
 
-def test_join_success_password_not_required_mentions_site_without_setup_link():
+def test_join_success_existing_user_with_invalid_setup_url_has_only_open_button():
     reset_user_state(3008)
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
             "is_new": False,
-            "password_setup_required": False,
-            "password_setup_url": "https://bloomclub.ru/password/setup?token=unused",
+            "login": "user@example.com",
+            "temporary_password": None,
+            "password_setup_url": "javascript:alert(1)",
         }
     )
 
-    message = main.handle_join_club(client, 3008, "bot-token")
+    message, keyboard = main.handle_join_club_result(client, 3008, "bot-token")
 
-    assert "Пароль уже установлен" in message
-    assert "Задать пароль для WEB-кабинета" not in message
-    assert "token=unused" not in message
-    assert get_web_client_token(3008) == "client-token"
+    assert "Пароль уже был установлен ранее" in message
+    assert "javascript:alert" not in message
+    labels = _keyboard_labels(keyboard)
+    assert "Открыть WEB-кабинет" in labels
+    assert "Установить новый пароль" not in labels
 
 
-
-def test_join_success_password_not_required_with_web_login_url_returns_login_button():
+def test_join_success_existing_user_with_web_login_url_uses_returned_open_link():
     reset_user_state(3009)
     web_login_url = "https://bloomclub.ru/login?login=user%40example.com"
+    setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
             "is_new": False,
-            "password_setup_required": False,
             "login": "user@example.com",
+            "temporary_password": None,
             "web_login_url": web_login_url,
+            "password_setup_url": setup_url,
         }
     )
 
     message, keyboard = main.handle_join_club_result(client, 3009, "bot-token")
 
     actions = _keyboard_actions(keyboard)
-    assert "WEB-кабинет уже создан" in message
+    assert "💗 WEB-кабинет уже создан" in message
     assert "Логин: user@example.com" in message
-    assert "Пароль уже установлен" in message
-    assert "Открыть вход в WEB-кабинет можно по кнопке ниже" in message
     assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": web_login_url}
+    assert actions[1] == {"type": "open_link", "label": "Установить новый пароль", "link": setup_url}
 
 
 def test_join_success_missing_login_does_not_crash():
     reset_user_state(3014)
-    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
             "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": password_setup_url,
+            "temporary_password": "tmp-pass-123",
         }
     )
 
     message, keyboard = main.handle_join_club_result(client, 3014, "bot-token")
 
+    assert "💗 WEB-кабинет создан" in message
     assert "Логин будет доступен в WEB-кабинете" in message
-    assert "Задать пароль для WEB-кабинета" in _keyboard_labels(keyboard)
-    assert password_setup_url not in message
+    assert "Пароль: tmp-pass-123" in message
+    assert "Открыть WEB-кабинет" in _keyboard_labels(keyboard)
 
 
-
-def test_join_success_invalid_web_login_url_falls_back_to_main_menu():
+def test_join_success_new_user_with_invalid_web_login_url_uses_safe_default_open_link():
     reset_user_state(3016)
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
-            "is_new": False,
-            "password_setup_required": False,
+            "is_new": True,
             "login": "user@example.com",
+            "temporary_password": "tmp-pass-123",
             "web_login_url": "javascript:alert(1)",
         }
     )
 
     message, keyboard = main.handle_join_club_result(client, 3016, "bot-token")
 
-    assert "Пароль уже установлен" in message
-    assert "Войти можно на сайте bloomclub.ru" in message
+    assert "💗 WEB-кабинет создан" in message
     assert "javascript:alert" not in message
-    assert _keyboard_labels(keyboard) == _keyboard_labels(keyboards.get_main_keyboard())
+    assert _keyboard_actions(keyboard)[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
 
-def test_join_success_password_setup_uses_ttl_from_response():
+
+def test_join_success_existing_user_uses_reset_password_url_alias():
     reset_user_state(3015)
+    setup_url = "https://bloomclub.ru/password/reset?token=one-time-token"
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": False,
+            "login": "vk_hash@vk.local",
+            "temporary_password": None,
+            "reset_password_url": setup_url,
+        }
+    )
+
+    message, keyboard = main.handle_join_club_result(client, 3015, "bot-token")
+
+    assert "Логин: vk_hash@vk.local" in message
+    assert {"type": "open_link", "label": "Установить новый пароль", "link": setup_url} in _keyboard_actions(keyboard)
+
+
+def test_join_success_new_user_ignores_setup_url_and_returns_open_button():
+    reset_user_state(3010)
+    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
     client = JoinSuccessClient(
         payload={
             "access_token": "client-token",
             "user": {"id": 10},
             "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": "https://bloomclub.ru/password/setup?token=one-time-token",
-            "password_setup_ttl_seconds": 1800,
-            "login": "vk_hash@vk.local",
+            "login": "user@example.com",
+            "temporary_password": "tmp-pass-123",
+            "password_setup_url": password_setup_url,
         }
     )
 
-    message = main.handle_join_club(client, 3015, "bot-token")
+    message, keyboard = main.handle_join_club_result(client, 3010, "bot-token")
 
-    assert "Логин: vk_hash@vk.local" in message
-    assert "Ссылка действует 30 минут" in message
+    assert "Пароль: tmp-pass-123" in message
+    assert password_setup_url not in message
+    assert "Установить новый пароль" not in _keyboard_labels(keyboard)
+    assert _keyboard_actions(keyboard)[0]["label"] == "Открыть WEB-кабинет"
+    assert "password_setup_url" not in get_user_state(3010)
+
+
+def test_join_success_existing_user_without_setup_url_still_returns_open_button():
+    reset_user_state(3011)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": False,
+            "login": "user@example.com",
+            "temporary_password": None,
+        }
+    )
+
+    _message, keyboard = main.handle_join_club_result(client, 3011, "bot-token")
+
+    labels = _keyboard_labels(keyboard)
+    assert "Открыть WEB-кабинет" in labels
+    assert "Установить новый пароль" not in labels
+
+
+def test_join_success_with_invalid_setup_url_does_not_return_setup_button():
+    reset_user_state(3012)
+    client = JoinSuccessClient(
+        payload={
+            "access_token": "client-token",
+            "user": {"id": 10},
+            "is_new": False,
+            "login": "user@example.com",
+            "temporary_password": None,
+            "password_setup_url": "ftp://bloomclub.ru/password/setup?token=unused",
+        }
+    )
+
+    message, keyboard = main.handle_join_club_result(client, 3012, "bot-token")
+
+    assert "Установить новый пароль" not in _keyboard_labels(keyboard)
+    assert "token=unused" not in message
+
 
 def _keyboard_labels(keyboard_json: str) -> list[str]:
     keyboard = json.loads(keyboard_json)
@@ -461,63 +570,6 @@ def _keyboard_labels(keyboard_json: str) -> list[str]:
 def _keyboard_actions(keyboard_json: str) -> list[dict]:
     keyboard = json.loads(keyboard_json)
     return [button["action"] for row in keyboard["buttons"] for button in row]
-
-
-def test_join_success_with_password_setup_url_returns_url_button_keyboard():
-    reset_user_state(3010)
-    password_setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
-    client = JoinSuccessClient(
-        payload={
-            "access_token": "client-token",
-            "user": {"id": 10},
-            "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": password_setup_url,
-        }
-    )
-
-    message, keyboard = main.handle_join_club_result(client, 3010, "bot-token")
-
-    actions = _keyboard_actions(keyboard)
-    assert "Задать пароль для WEB-кабинета" in _keyboard_labels(keyboard)
-    assert actions[0] == {"type": "open_link", "label": "Задать пароль для WEB-кабинета", "link": password_setup_url}
-    assert password_setup_url not in message
-    assert "password_setup_url" not in get_user_state(3010)
-
-
-def test_join_success_without_url_does_not_return_url_button():
-    reset_user_state(3011)
-    client = JoinSuccessClient(
-        payload={
-            "access_token": "client-token",
-            "user": {"id": 10},
-            "is_new": True,
-            "password_setup_required": True,
-        }
-    )
-
-    _message, keyboard = main.handle_join_club_result(client, 3011, "bot-token")
-
-    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
-    assert _keyboard_labels(keyboard) == _keyboard_labels(keyboards.get_main_keyboard())
-
-
-def test_join_success_with_invalid_url_does_not_return_url_button():
-    reset_user_state(3012)
-    client = JoinSuccessClient(
-        payload={
-            "access_token": "client-token",
-            "user": {"id": 10},
-            "is_new": True,
-            "password_setup_required": True,
-            "password_setup_url": "ftp://bloomclub.ru/password/setup?token=unused",
-        }
-    )
-
-    message, keyboard = main.handle_join_club_result(client, 3012, "bot-token")
-
-    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
-    assert "token=unused" not in message
 
 
 def test_link_code_flow_keyboard_remains_main_menu_without_url_button():

@@ -1366,12 +1366,29 @@ def extract_web_session_from_onboard_response(response: dict) -> tuple[str | Non
     return token, user
 
 
-def _format_password_setup_ttl(response: dict) -> str:
-    ttl_seconds = response.get("password_setup_ttl_seconds")
-    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, (int, float)) or ttl_seconds <= 0:
-        return "60 минут"
-    ttl_minutes = max(1, round(ttl_seconds / 60))
-    return f"{ttl_minutes} минут"
+def extract_temporary_password(response: dict) -> str | None:
+    temporary_password = response.get("temporary_password")
+    if isinstance(temporary_password, str) and temporary_password.strip():
+        return temporary_password.strip()
+    return None
+
+
+def extract_password_setup_url(response: dict) -> str | None:
+    for field_name in ("password_setup_url", "setup_password_url", "reset_password_url", "password_reset_url"):
+        value = response.get(field_name)
+        if is_valid_open_link_url(value):
+            return str(value).strip()
+    return None
+
+
+def extract_web_login_url(response: dict, web_client: WebApiClient | None = None) -> str:
+    value = response.get("web_login_url")
+    if is_valid_open_link_url(value):
+        return str(value).strip()
+    root_url = getattr(web_client, "root_url", None)
+    if isinstance(root_url, str) and root_url.strip():
+        return root_url.strip().rstrip("/") + "/"
+    return "https://bloomclub.ru/"
 
 
 def _append_login_line(lines: list[str], login: object) -> None:
@@ -1382,64 +1399,45 @@ def _append_login_line(lines: list[str], login: object) -> None:
 
 
 def build_join_club_success_text(response: dict, city_retry_without_slug: bool = False) -> str:
-    password_setup_url = response.get("password_setup_url")
-    web_login_url = response.get("web_login_url")
-    password_setup_required = response.get("password_setup_required") is True
-    password_already_set = response.get("password_setup_required") is False
+    login = response.get("login")
+    temporary_password = extract_temporary_password(response)
+    is_new_with_password = response.get("is_new") is True and temporary_password is not None
 
-    if password_setup_required:
-        lines = ["WEB-кабинет создан"]
-    elif password_already_set:
-        lines = ["WEB-кабинет уже создан"]
-    elif response.get("is_new") is True:
-        lines = ["WEB-кабинет создан"]
-    else:
-        lines = ["WEB-кабинет уже создан"]
-
-    lines.extend(
-        [
+    if is_new_with_password:
+        lines = [
+            "💗 WEB-кабинет создан",
             "",
             "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
-            "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
-            "WEB-кабинет: доступ для бота активен.",
-            "Явная VK-привязка: через код из WEB-кабинета. "
-            "Создайте код в WEB-кабинете и отправьте сюда: Привязать КОД",
+            "",
+            "Ваши данные для входа:",
+        ]
+        _append_login_line(lines, login)
+        lines.extend(
+            [
+                f"Пароль: {temporary_password}",
+                "",
+                "Сохраните эти данные.",
+                "",
+                "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты.",
+            ]
+        )
+    else:
+        lines = [
+            "💗 WEB-кабинет уже создан",
+            "",
+            "Вы можете войти на bloomclub.ru.",
             "",
         ]
-    )
-    _append_login_line(lines, response.get("login"))
-
-    if password_setup_required and is_valid_open_link_url(password_setup_url):
+        _append_login_line(lines, login)
         lines.extend(
             [
-                "Придумайте пароль по ссылке ниже.",
-                "Пароль не отправляйте в VK.",
-                f"Ссылка действует {_format_password_setup_ttl(response)}.",
-            ]
-        )
-    elif password_setup_required:
-        lines.extend(
-            [
-                "Пароль не отправляйте в VK.",
-                "Ссылка для установки пароля временно недоступна. Попробуйте нажать «💗 Присоединиться к клубу» позже или войдите через WEB-кабинет, когда ссылка появится.",
-            ]
-        )
-    elif password_already_set:
-        lines.append("Пароль уже установлен.")
-        if is_valid_open_link_url(web_login_url):
-            lines.append("Открыть вход в WEB-кабинет можно по кнопке ниже.")
-        else:
-            lines.append("Войти можно на сайте bloomclub.ru.")
-    else:
-        lines.extend(
-            [
-                "Пароль не отправляйте в VK.",
-                "Статус пароля уточняется в WEB-кабинете; если нужна установка пароля, бот покажет безопасную кнопку без ссылки в тексте.",
+                "",
+                "Пароль уже был установлен ранее. Если вы его не помните, установите новый пароль по кнопке ниже.",
             ]
         )
 
     if city_retry_without_slug:
-        lines.append("Город можно будет выбрать позже в личном кабинете.")
+        lines.extend(["", "Город можно будет выбрать позже в личном кабинете."])
     return "\n".join(lines)
 
 
@@ -1452,11 +1450,15 @@ def map_join_club_error(error: WebApiError) -> str:
 
 
 def should_show_password_setup_button(response: dict) -> bool:
-    return response.get("password_setup_required") is True and is_valid_open_link_url(response.get("password_setup_url"))
+    return not is_new_join_club_account(response) and extract_password_setup_url(response) is not None
 
 
 def should_show_web_login_button(response: dict) -> bool:
-    return response.get("password_setup_required") is False and is_valid_open_link_url(response.get("web_login_url"))
+    return True
+
+
+def is_new_join_club_account(response: dict) -> bool:
+    return response.get("is_new") is True and extract_temporary_password(response) is not None
 
 
 def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> tuple[str, str]:
@@ -1484,13 +1486,9 @@ def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot
     if not token:
         return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
     set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
-    keyboard = (
-        get_web_onboarding_keyboard(
-            password_setup_url=payload.get("password_setup_url") if should_show_password_setup_button(payload) else None,
-            web_login_url=payload.get("web_login_url") if should_show_web_login_button(payload) else None,
-        )
-        if should_show_password_setup_button(payload) or should_show_web_login_button(payload)
-        else get_main_keyboard()
+    keyboard = get_web_onboarding_keyboard(
+        password_setup_url=extract_password_setup_url(payload) if should_show_password_setup_button(payload) else None,
+        web_login_url=extract_web_login_url(payload, web_client) if should_show_web_login_button(payload) else None,
     )
     return build_join_club_success_text(payload, city_retry_without_slug=retried_without_city), keyboard
 

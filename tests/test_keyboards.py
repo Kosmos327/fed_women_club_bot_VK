@@ -94,6 +94,16 @@ def test_web_onboarding_keyboard_adds_web_login_button_for_valid_url():
     assert "💗 Присоединиться к клубу" in [action["label"] for action in actions]
 
 
+def test_web_onboarding_keyboard_adds_login_and_password_setup_buttons():
+    web_login_url = "https://bloomclub.ru/login"
+    setup_url = "https://bloomclub.ru/password/setup?token=one-time-token"
+
+    actions = _actions(get_web_onboarding_keyboard(password_setup_url=setup_url, web_login_url=web_login_url))
+
+    assert actions[0] == {"type": "open_link", "label": BUTTON_WEB_LOGIN, "link": web_login_url}
+    assert actions[1] == {"type": "open_link", "label": BUTTON_PASSWORD_SETUP, "link": setup_url}
+
+
 def test_web_onboarding_keyboard_skips_invalid_web_login_url():
     keyboard = get_web_onboarding_keyboard(web_login_url="ftp://bloomclub.ru/login")
 
