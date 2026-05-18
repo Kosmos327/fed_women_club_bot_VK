@@ -1022,13 +1022,13 @@ class PaymentWebClient:
         self.create_calls.append({"token": token, "amount": amount, "source": source, "comment": comment})
         if self.create_error:
             raise self.create_error
-        return {"id": 101, "amount": 1500, "status": "pending", "created_at": "2026-05-17T10:00:00Z"}
+        return {"id": 101, "amount": main.SUBSCRIPTION_PRICE_RUB, "status": "pending", "created_at": "2026-05-17T10:00:00Z"}
 
     def mark_client_payment_paid(self, token, payment_request_id, comment=None):
         self.mark_calls.append({"token": token, "payment_request_id": payment_request_id, "comment": comment})
         if self.mark_error:
             raise self.mark_error
-        return {"id": payment_request_id, "amount": 1500, "status": "paid", "created_at": "2026-05-17T10:00:00Z"}
+        return {"id": payment_request_id, "amount": main.SUBSCRIPTION_PRICE_RUB, "status": "paid", "created_at": "2026-05-17T10:00:00Z"}
 
     def get_client_payment_requests(self, token):
         self.list_calls.append(token)
@@ -1059,6 +1059,20 @@ def test_format_web_payment_request_maps_statuses_and_fields():
     assert main.format_web_payment_status("rejected") == "Отклонено"
 
 
+def test_format_web_payment_request_with_missing_amount_shows_subscription_price():
+    message = main.format_web_payment_request({"id": 8, "status": "pending"})
+
+    assert "Сумма: 349 ₽" in message
+
+
+def test_format_web_payment_request_with_zero_amount_shows_subscription_price():
+    for amount in (None, 0, "0", "0.00"):
+        message = main.format_web_payment_request({"id": 8, "amount": amount, "status": "pending"})
+
+        assert "Сумма: 349 ₽" in message
+        assert "Сумма: 0" not in message
+
+
 def test_payment_button_with_web_token_creates_web_request_not_legacy():
     reset_user_state(7001)
     get_user_state(7001)["web_client_token"] = "client-token"
@@ -1068,10 +1082,14 @@ def test_payment_button_with_web_token_creates_web_request_not_legacy():
 
     assert "Заявка на оплату создана" in message
     assert "ID заявки: 101" in message
+    assert "349 ₽" in message
     assert "Ожидает оплаты" in message
+    assert "✅ Я оплатил" in message
     assert "администратор проверит" in message.lower()
     assert get_user_state(7001)["last_payment_request_id"] == 101
-    assert client.create_calls == [{"token": "client-token", "amount": None, "source": "vk", "comment": None}]
+    assert client.create_calls == [
+        {"token": "client-token", "amount": main.SUBSCRIPTION_PRICE_RUB, "source": "vk", "comment": None}
+    ]
     assert "payment_paid" in keyboard
 
 
