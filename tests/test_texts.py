@@ -1022,9 +1022,85 @@ def test_category_selected_uses_nested_profile_city_when_state_city_missing():
     assert "Данные пока не найдены" not in message
 
 
+def test_new_onboarded_bound_active_user_opens_partners_without_generic_error():
+    reset_user_state(6010)
+    state = get_user_state(6010)
+    state["web_client_token"] = "client-token"
+    state["web_link_status"] = "active"
+    client = PartnersClient(profile={"selected_city_slug": "novosibirsk"})
+
+    message, keyboard_json = main.handle_partners_start(client, 6010, "bot-token")
+
+    assert message == texts.PARTNERS_INTRO_TEXT
+    assert "Произошла ошибка" not in message
+    assert client.profile_calls == ["client-token"]
+    assert get_user_state(6010)["web_catalog_city_slug"] == "novosibirsk"
+    assert "category_selected" in keyboard_json
+
+
+def test_empty_web_catalog_returns_city_empty_state_message():
+    reset_user_state(6011)
+    state = get_user_state(6011)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_city_slug"] = "novosibirsk"
+    client = PartnersClient(partners={"data": {"items": []}})
+
+    message, _keyboard = main.handle_category_selected(client, 6011, "bot-token", category="all", category_slug=None)
+
+    assert message == "Партнёры в вашем городе пока не найдены. Попробуйте выбрать другой город или загляните позже."
+    assert "Произошла ошибка" not in message
+
+
+def test_missing_city_for_web_catalog_prompts_city_selection_without_catalog_call():
+    reset_user_state(6012)
+    get_user_state(6012)["web_client_token"] = "client-token"
+    client = PartnersClient(partners=[{"id": 1, "name": "Partner"}])
+
+    message, keyboard_json = main.handle_category_selected(client, 6012, "bot-token", category="all", category_slug=None)
+
+    assert message == texts.PARTNERS_CITY_REQUIRED_TEXT
+    assert client.catalog_calls == []
+    assert keyboards.BUTTON_CITY.split(maxsplit=1)[-1] not in message
+    assert "city_selected" in keyboard_json
+
+
+@pytest.mark.parametrize("payload", [None, "not-json", {"data": None}, {"data": {"items": None}}, {"items": [None, "bad"]}])
+def test_invalid_web_catalog_payload_returns_safe_empty_state(payload):
+    reset_user_state(6013)
+    state = get_user_state(6013)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_city_slug"] = "novosibirsk"
+    client = PartnersClient(partners=payload)
+
+    message, _keyboard = main.handle_category_selected(client, 6013, "bot-token", category="all", category_slug=None)
+
+    assert message == texts.PARTNERS_EMPTY_TEXT
+    assert "Произошла ошибка" not in message
+
+
+def test_catalog_data_wrapper_is_supported():
+    partners = main.extract_web_catalog_partners({"data": {"items": [{"id": 5, "name": "Data Partner"}]}})
+
+    assert partners == [{"id": 5, "name": "Data Partner"}]
+
+
+def test_partners_start_invalid_profile_payload_is_safe_city_prompt():
+    reset_user_state(6014)
+    get_user_state(6014)["web_client_token"] = "client-token"
+    client = PartnersClient(profile=["unexpected"])
+
+    message, keyboard_json = main.handle_partners_start(client, 6014, "bot-token")
+
+    assert message == texts.PARTNERS_CITY_REQUIRED_TEXT
+    assert "Произошла ошибка" not in message
+    assert "city_selected" in keyboard_json
+
+
 def test_category_selected_web_api_error_returns_safe_text_without_raw_exception():
     reset_user_state(6005)
-    get_user_state(6005)["web_client_token"] = "client-token"
+    state = get_user_state(6005)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_city_slug"] = "novosibirsk"
     client = PartnersClient(partners_error=WebApiError("server_error", status_code=500, detail="token client-token SECRET"))
 
     message, _keyboard = main.handle_category_selected(client, 6005, "bot-token", category="Красота", category_slug="beauty")

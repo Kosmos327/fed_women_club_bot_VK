@@ -67,6 +67,7 @@ from texts import (
     MY_PRIVILEGES_WEB_LINK_REQUIRED_TEXT,
     MY_PRIVILEGES_WEB_UNAVAILABLE_TEXT,
     PARTNERS_EMPTY_TEXT,
+    PARTNERS_CITY_REQUIRED_TEXT,
     PARTNERS_UNKNOWN_CATEGORY_TEXT,
     PARTNERS_WEB_LINK_REQUIRED_TEXT,
     PARTNERS_WEB_UNAVAILABLE_TEXT,
@@ -462,10 +463,16 @@ def extract_web_catalog_partners(payload: object) -> list[dict]:
         raw_items = payload
     elif isinstance(payload, dict):
         raw_items = None
-        for key in ("items", "results", "partners"):
-            if isinstance(payload.get(key), list):
-                raw_items = payload.get(key)
+        for key in ("items", "results", "partners", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                raw_items = value
                 break
+            if isinstance(value, dict):
+                nested_items = extract_web_catalog_partners(value)
+                if nested_items:
+                    raw_items = nested_items
+                    break
         if raw_items is None:
             raw_items = []
     else:
@@ -473,18 +480,73 @@ def extract_web_catalog_partners(payload: object) -> list[dict]:
     return [item for item in raw_items if isinstance(item, dict)]
 
 
+def extract_web_profile(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    for key in ("client", "user", "profile", "data", "item"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return payload
+
+
+def _get_state_city_slug(state: dict) -> str | None:
+    for key in ("web_catalog_city_slug", "selected_city_slug", "city_slug"):
+        value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for key in ("web_client_profile", "web_client_user"):
+        value = state.get(key)
+        if isinstance(value, dict):
+            city_slug = get_selected_city_slug_from_profile(value, state)
+            if city_slug:
+                return city_slug
+    return get_web_known_city_slug(state.get("selected_city"))
+
+
+def log_web_catalog_error(
+    action: str,
+    vk_user_id: int | str,
+    endpoint: str,
+    status_code: int | None,
+    error_type: str,
+    city_slug: str | None = None,
+    category_slug: str | None = None,
+) -> None:
+    logger.warning(
+        "WEB catalog error action=%s vk_user_id=%s endpoint=%s status_code=%s error_type=%s city_slug=%s category_slug=%s",
+        action,
+        vk_user_id,
+        endpoint,
+        status_code,
+        error_type,
+        city_slug,
+        category_slug,
+    )
+
+
 def get_selected_city_slug_from_profile(profile: dict | None, state: dict | None = None) -> str | None:
-    profile = profile or {}
+    profile = extract_web_profile(profile)
     state = state or {}
     for key in ("selected_city_slug", "city_slug"):
         value = profile.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    selected_city = profile.get("selected_city")
+    selected_city = profile.get("selected_city") or profile.get("city")
     if isinstance(selected_city, dict):
-        value = selected_city.get("slug")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        for key in ("slug", "city_slug"):
+            value = selected_city.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        value = selected_city.get("name") or selected_city.get("title")
+        if isinstance(value, str):
+            city_slug = get_web_known_city_slug(value)
+            if city_slug:
+                return city_slug
+    if isinstance(selected_city, str):
+        city_slug = get_web_known_city_slug(selected_city)
+        if city_slug:
+            return city_slug
     return get_web_known_city_slug(state.get("selected_city"))
 
 
@@ -749,22 +811,21 @@ def handle_partners_start(web_client: WebApiClient, vk_user_id: int | str, bot_t
     if not is_linked or not token:
         return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
     try:
-        profile = web_client.get_client_profile(token)
+        raw_profile = web_client.get_client_profile(token)
     except WebApiError as exc:
-        logger.warning(
-            "Partners profile WEB API error source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s code=%s http_status=%s",
-            vk_user_id,
-            None,
-            None,
-            True,
-            exc.code,
-            exc.status_code,
-        )
+        log_web_catalog_error("partners_start_profile", vk_user_id, "/api/v1/clients/me", exc.status_code, exc.code)
         return PARTNERS_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
-    city_slug = get_selected_city_slug_from_profile(profile, state)
+    except Exception as exc:
+        log_web_catalog_error("partners_start_profile", vk_user_id, "/api/v1/clients/me", None, type(exc).__name__)
+        return PARTNERS_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
+    profile = extract_web_profile(raw_profile)
+    city_slug = get_selected_city_slug_from_profile(profile, state) or _get_state_city_slug(state)
     state["web_client_profile"] = profile
     state["web_catalog_city_slug"] = city_slug
     state["categories"] = list(WEB_PARTNER_CATEGORIES)
+    if not city_slug:
+        log_web_catalog_error("partners_start_city", vk_user_id, "/api/v1/clients/catalog/partners", None, "missing_city_slug")
+        return PARTNERS_CITY_REQUIRED_TEXT, get_city_keyboard()
     return PARTNERS_INTRO_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
 
 
@@ -794,11 +855,11 @@ def handle_category_selected(
                     True,
                 )
                 return PARTNERS_UNKNOWN_CATEGORY_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
-        city_slug = state.get("web_catalog_city_slug")
+        city_slug = _get_state_city_slug(state)
+        state["web_catalog_city_slug"] = city_slug
         if not city_slug:
-            profile = state.get("web_client_profile") if isinstance(state.get("web_client_profile"), dict) else {}
-            city_slug = get_selected_city_slug_from_profile(profile, state)
-            state["web_catalog_city_slug"] = city_slug
+            log_web_catalog_error("category_selected_city", vk_user_id, "/api/v1/clients/catalog/partners", None, "missing_city_slug", category_slug=requested_slug)
+            return PARTNERS_CITY_REQUIRED_TEXT, get_city_keyboard()
         logger.info(
             "Partners category requested source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s",
             vk_user_id,
@@ -809,15 +870,10 @@ def handle_category_selected(
         try:
             payload = web_client.get_client_catalog_partners(token, city_slug=city_slug, category_slug=requested_slug)
         except WebApiError as exc:
-            logger.warning(
-                "Partners WEB API error source=web_api vk_user_id=%s city_slug=%s category_slug=%s token_present=%s code=%s http_status=%s",
-                vk_user_id,
-                city_slug,
-                requested_slug,
-                True,
-                exc.code,
-                exc.status_code,
-            )
+            log_web_catalog_error("category_selected", vk_user_id, "/api/v1/clients/catalog/partners", exc.status_code, exc.code, city_slug, requested_slug)
+            return PARTNERS_WEB_UNAVAILABLE_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
+        except Exception as exc:
+            log_web_catalog_error("category_selected", vk_user_id, "/api/v1/clients/catalog/partners", None, type(exc).__name__, city_slug, requested_slug)
             return PARTNERS_WEB_UNAVAILABLE_TEXT, get_categories_keyboard(list(WEB_PARTNER_CATEGORIES))
         partners = extract_web_catalog_partners(payload)
         _cache_web_catalog_partners(state, partners, city_slug, requested_slug)
