@@ -73,6 +73,10 @@ from texts import (
     NO_SUBSCRIPTION_TEXT,
     PARTNERS_FOUND_TEXT,
     PARTNERS_INTRO_TEXT,
+    PARTNER_CACHE_STALE_TEXT,
+    PARTNER_PAYLOAD_INVALID_TEXT,
+    OFFER_CACHE_STALE_TEXT,
+    OFFER_PAYLOAD_INVALID_TEXT,
     PAYMENT_RECEIPT_RECEIVED_TEXT,
     PAYMENT_RECEIPT_REQUEST_TEXT,
     PAYMENT_REQUEST_NOT_FOUND_TEXT,
@@ -141,6 +145,64 @@ def _is_filled(value: object) -> bool:
     if isinstance(value, str):
         return value.strip() not in {"", "—", "None"}
     return True
+
+
+def normalize_payload_id(value: object) -> str | None:
+    """Return a non-empty payload id as a trimmed string without numeric coercion."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def safe_int_id(value: object) -> int | None:
+    """Convert id-like values to int only when the whole payload is int-compatible."""
+    normalized = normalize_payload_id(value)
+    if normalized is None:
+        return None
+    try:
+        return int(normalized)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_cached_web_partner(vk_user_id: int | str, partner_id: object) -> dict | None:
+    partner_key = normalize_payload_id(partner_id)
+    if partner_key is None:
+        return None
+    partner = (get_user_state(int(vk_user_id)).get("web_catalog_partners_by_id") or {}).get(partner_key)
+    return partner if isinstance(partner, dict) else None
+
+
+def get_cached_web_offer(vk_user_id: int | str, offer_id: object) -> dict | None:
+    offer_key = normalize_payload_id(offer_id)
+    if offer_key is None:
+        return None
+    offer = (get_user_state(int(vk_user_id)).get("web_partner_offers_by_id") or {}).get(offer_key)
+    return offer if isinstance(offer, dict) else None
+
+
+def log_partner_payload_guard(
+    action: str,
+    vk_user_id: int | str,
+    partner_id: object = None,
+    offer_id: object = None,
+    id_parse_result: str = "unchecked",
+) -> None:
+    logger.info(
+        "Partner payload guard source=web_api action=%s vk_user_id=%s partner_id_present=%s offer_id_present=%s id_parse_result=%s",
+        action,
+        vk_user_id,
+        normalize_payload_id(partner_id) is not None,
+        normalize_payload_id(offer_id) is not None,
+        id_parse_result,
+    )
+
+
+def get_partner_stale_keyboard(vk_user_id: int | str) -> str:
+    state = get_user_state(int(vk_user_id))
+    categories = state.get("categories") or list(WEB_PARTNER_CATEGORIES)
+    return get_categories_keyboard(categories)
 
 
 def format_user_date(value: str | None) -> str:
@@ -560,21 +622,36 @@ def handle_web_partner_selected(
     web_client: WebApiClient,
     vk_user_id: int | str,
     bot_token: str,
-    partner_id: int,
+    partner_id: object,
 ) -> tuple[str, str]:
-    state = get_user_state(int(vk_user_id))
-    partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
+    partner_key = normalize_payload_id(partner_id)
+    if partner_key is None:
+        log_partner_payload_guard("web_partner_selected", vk_user_id, partner_id, id_parse_result="missing_partner_id")
+        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
     is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
     token = get_web_client_token(vk_user_id)
     if not is_linked or not token:
         return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+
+    state = get_user_state(int(vk_user_id))
+    partner = get_cached_web_partner(vk_user_id, partner_key)
+    if partner is None:
+        log_partner_payload_guard("web_partner_selected", vk_user_id, partner_key, id_parse_result="stale_partner_cache")
+        return PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(vk_user_id)
+
+    partner_int_id = safe_int_id(partner_key)
+    if partner_int_id is None:
+        log_partner_payload_guard("web_partner_selected", vk_user_id, partner_key, id_parse_result="partner_id_not_int")
+        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
     try:
-        payload = web_client.get_client_partner_offers(token, partner_id)
+        payload = web_client.get_client_partner_offers(token, partner_int_id)
     except WebApiError as exc:
         logger.warning(
             "Partner offers WEB API error source=web_api vk_user_id=%s partner_id=%s token_present=%s code=%s http_status=%s",
             vk_user_id,
-            partner_id,
+            partner_key,
             True,
             exc.code,
             exc.status_code,
@@ -582,35 +659,71 @@ def handle_web_partner_selected(
         text = map_web_partner_privilege_error_to_text(exc)
         keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
         return text, keyboard
+    log_partner_payload_guard("web_partner_selected", vk_user_id, partner_key, id_parse_result="partner_id_int")
     offers = extract_web_partner_offers(payload)
-    _cache_web_partner_offers(state, partner_id, offers)
-    state["last_partner_id"] = partner_id
-    detail = format_web_partner_compact(partner) if isinstance(partner, dict) else f"Партнёр {partner_id}"
+    _cache_web_partner_offers(state, partner_int_id, offers)
+    state["last_partner_id"] = partner_int_id
+    detail = format_web_partner_compact(partner)
     if offers:
-        return f"{detail}\n\nВыберите предложение:", get_web_offers_keyboard(partner_id, offers)
-    return f"{detail}\n\nУ партнёра пока нет активных предложений.", get_web_partner_actions_keyboard(partner_id)
+        return f"{detail}\n\nВыберите предложение:", get_web_offers_keyboard(partner_int_id, offers)
+    return f"{detail}\n\nУ партнёра пока нет активных предложений.", get_web_partner_actions_keyboard(partner_int_id)
 
 
 def handle_web_offer_selected(
     web_client: WebApiClient,
     vk_user_id: int | str,
     bot_token: str,
-    partner_id: int,
-    offer_id: int | None = None,
+    partner_id: object,
+    offer_id: object | None = None,
+    *,
+    offer_required: bool = False,
 ) -> tuple[str, str]:
-    state = get_user_state(int(vk_user_id))
+    action = "web_offer_selected" if offer_required else "web_get_privilege"
+    partner_key = normalize_payload_id(partner_id)
+    if partner_key is None:
+        log_partner_payload_guard(action, vk_user_id, partner_id, offer_id, "missing_partner_id")
+        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
+    offer_key = normalize_payload_id(offer_id)
+    if offer_required and offer_key is None:
+        log_partner_payload_guard(action, vk_user_id, partner_key, offer_id, "missing_offer_id")
+        return OFFER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
     is_linked = restore_web_client_session(web_client, vk_user_id, bot_token)
     token = get_web_client_token(vk_user_id)
     if not is_linked or not token:
         return PARTNERS_WEB_LINK_REQUIRED_TEXT, get_main_keyboard()
+
+    partner = get_cached_web_partner(vk_user_id, partner_key)
+    if partner is None:
+        log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "stale_partner_cache")
+        return PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(vk_user_id)
+
+    partner_int_id = safe_int_id(partner_key)
+    if partner_int_id is None:
+        log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "partner_id_not_int")
+        return PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
+    offer = None
+    offer_int_id = None
+    if offer_key is not None:
+        offer = get_cached_web_offer(vk_user_id, offer_key)
+        if offer is None:
+            log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "stale_offer_cache")
+            return OFFER_CACHE_STALE_TEXT, get_nav_keyboard()
+        offer_int_id = safe_int_id(offer_key)
+        if offer_int_id is None:
+            log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "offer_id_not_int")
+            return OFFER_PAYLOAD_INVALID_TEXT, get_main_keyboard()
+
     try:
-        payload = web_client.create_client_partner_verification(token, partner_id, offer_id)
+        payload = web_client.create_client_partner_verification(token, partner_int_id, offer_int_id)
     except WebApiError as exc:
         logger.warning(
             "Partner verification WEB API error source=web_api vk_user_id=%s partner_id=%s offer_id=%s token_present=%s code=%s http_status=%s",
             vk_user_id,
-            partner_id,
-            offer_id,
+            partner_key,
+            offer_key,
             True,
             exc.code,
             exc.status_code,
@@ -618,8 +731,7 @@ def handle_web_offer_selected(
         text = map_web_partner_privilege_error_to_text(exc)
         keyboard = get_no_subscription_keyboard() if _is_no_subscription_error(exc) else get_nav_keyboard()
         return text, keyboard
-    partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
-    offer = (state.get("web_partner_offers_by_id") or {}).get(str(offer_id)) if offer_id is not None else None
+    log_partner_payload_guard(action, vk_user_id, partner_key, offer_key, "ids_int")
     return format_web_created_verification_message(payload, partner=partner, offer=offer), get_verify_success_keyboard()
 
 
@@ -1460,30 +1572,50 @@ def main() -> None:
                         send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "web_offer_selected":
-                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
-                        offer_id = int(payload.get("offer_id")) if payload.get("offer_id") is not None else None
-                        message_text, keyboard = handle_web_offer_selected(web_client, from_id, config.bot_api_token, partner_id, offer_id)
+                        partner_id = payload.get("partner_id") or state.get("last_partner_id")
+                        offer_id = payload.get("offer_id")
+                        message_text, keyboard = handle_web_offer_selected(
+                            web_client,
+                            from_id,
+                            config.bot_api_token,
+                            partner_id,
+                            offer_id,
+                            offer_required=True,
+                        )
                         send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     if action == "web_get_privilege":
-                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
+                        partner_id = payload.get("partner_id") or state.get("last_partner_id")
                         message_text, keyboard = handle_web_offer_selected(web_client, from_id, config.bot_api_token, partner_id, None)
                         send_message(vk_api, peer_id, message_text, keyboard)
                         continue
                     partner_id = payload.get("partner_id") if action == "partner_selected" else parse_partner_command(raw_text)
+                    if action == "partner_selected" and normalize_payload_id(partner_id) is None:
+                        send_message(vk_api, peer_id, PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                        continue
                     if partner_id:
-                        partner_id = int(partner_id)
-                        cached_web_partner = (state.get("web_catalog_partners_by_id") or {}).get(str(partner_id))
-                        state["last_partner_id"] = partner_id
+                        partner_key = normalize_payload_id(partner_id)
+                        partner_int_id = safe_int_id(partner_key)
+                        if partner_int_id is None:
+                            send_message(vk_api, peer_id, PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                            continue
+                        cached_web_partner = get_cached_web_partner(from_id, partner_key)
+                        state["last_partner_id"] = partner_int_id
                         if isinstance(cached_web_partner, dict):
-                            message_text, keyboard = handle_web_partner_selected(web_client, from_id, config.bot_api_token, partner_id)
+                            message_text, keyboard = handle_web_partner_selected(web_client, from_id, config.bot_api_token, partner_key)
                             send_message(vk_api, peer_id, message_text, keyboard)
                             continue
-                        partner = gateway.get_partner(partner_id)
-                        send_message(vk_api, peer_id, format_partner_card(partner), get_partner_actions_keyboard(partner_id, has_contacts=True))
+                        if get_web_client_token(from_id) and "web_catalog_partners_by_id" in state:
+                            send_message(vk_api, peer_id, PARTNER_CACHE_STALE_TEXT, get_partner_stale_keyboard(from_id))
+                            continue
+                        partner = gateway.get_partner(partner_int_id)
+                        send_message(vk_api, peer_id, format_partner_card(partner), get_partner_actions_keyboard(partner_int_id, has_contacts=True))
                         continue
                     if action == "partner_services":
-                        partner_id = int(payload.get("partner_id"))
+                        partner_id = safe_int_id(payload.get("partner_id"))
+                        if partner_id is None:
+                            send_message(vk_api, peer_id, PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                            continue
                         services = gateway.get_partner_services(partner_id)
                         state["last_partner_id"] = partner_id
                         state["last_services"] = services
@@ -1496,16 +1628,28 @@ def main() -> None:
                         continue
                     service_id = payload.get("service_id") if action == "service_selected" else parse_service_command(raw_text)
                     if service_id:
-                        service_id = int(service_id)
-                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
+                        service_id = safe_int_id(service_id)
+                        partner_id = safe_int_id(payload.get("partner_id") or state.get("last_partner_id"))
+                        if service_id is None or partner_id is None:
+                            send_message(vk_api, peer_id, OFFER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                            continue
                         services = state.get("last_services") or gateway.get_partner_services(partner_id)
-                        service = next((s for s in services if int(s.get("id", -1)) == service_id), {"id": service_id})
+                        service = next((s for s in services if safe_int_id(s.get("id")) == service_id), {"id": service_id})
                         partner = gateway.get_partner(partner_id) if partner_id else {}
                         send_message(vk_api, peer_id, format_service_card(service, partner.get("name"), get_partner_address(partner)), get_service_actions_keyboard(partner_id, service_id))
                         continue
-                    code_service_id = int(payload.get("service_id")) if action == "get_discount_code" and payload.get("service_id") else parse_code_command(raw_text)
+                    if action == "get_discount_code":
+                        code_service_id = safe_int_id(payload.get("service_id"))
+                        if code_service_id is None:
+                            send_message(vk_api, peer_id, OFFER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                            continue
+                    else:
+                        code_service_id = parse_code_command(raw_text)
                     if code_service_id:
-                        partner_id = int(payload.get("partner_id") or state.get("last_partner_id") or 0)
+                        partner_id = safe_int_id(payload.get("partner_id") or state.get("last_partner_id"))
+                        if partner_id is None:
+                            send_message(vk_api, peer_id, PARTNER_PAYLOAD_INVALID_TEXT, get_main_keyboard())
+                            continue
                         code_data = gateway.request_discount_code(from_id, partner_id, code_service_id)
                         send_message(vk_api, peer_id, format_code_item(code_data))
                         continue

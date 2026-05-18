@@ -945,6 +945,119 @@ class LegacyServicesGatewayShouldNotBeCalled:
         raise AssertionError("legacy discount code endpoint must not be called")
 
 
+def test_web_partner_selected_missing_partner_id_returns_safe_text():
+    reset_user_state(7101)
+    get_user_state(7101)["web_client_token"] = "client-token"
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_partner_selected(client, 7101, "bot-token", " ")
+
+    assert message == main.PARTNER_PAYLOAD_INVALID_TEXT
+    assert client.offers_calls == []
+
+
+def test_web_partner_selected_stale_cache_returns_stale_text_without_legacy_call():
+    reset_user_state(7102)
+    state = get_user_state(7102)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {}
+    client = WebPartnerFlowClient()
+    legacy = LegacyServicesGatewayShouldNotBeCalled()
+
+    message, _keyboard = main.handle_web_partner_selected(client, 7102, "bot-token", 11)
+
+    assert message == main.PARTNER_CACHE_STALE_TEXT
+    assert client.offers_calls == []
+    assert legacy is not None
+
+
+def test_web_partner_selected_non_int_id_returns_safe_text_without_web_api_call():
+    reset_user_state(7103)
+    state = get_user_state(7103)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"uuid-11": {"id": "uuid-11", "name": "UUID Partner"}}
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_partner_selected(client, 7103, "bot-token", "uuid-11")
+
+    assert message == main.PARTNER_PAYLOAD_INVALID_TEXT
+    assert client.offers_calls == []
+
+
+def test_web_offer_selected_missing_offer_id_returns_safe_text():
+    reset_user_state(7104)
+    state = get_user_state(7104)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7104, "bot-token", 11, None, offer_required=True)
+
+    assert message == main.OFFER_PAYLOAD_INVALID_TEXT
+    assert client.verification_calls == []
+
+
+def test_web_offer_selected_stale_offer_returns_stale_text():
+    reset_user_state(7105)
+    state = get_user_state(7105)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {}
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7105, "bot-token", 11, 5, offer_required=True)
+
+    assert message == main.OFFER_CACHE_STALE_TEXT
+    assert client.verification_calls == []
+
+
+@pytest.mark.parametrize(
+    ("partner_id", "offer_id", "expected"),
+    [
+        ("uuid-partner", 5, main.PARTNER_PAYLOAD_INVALID_TEXT),
+        (11, "uuid-offer", main.OFFER_PAYLOAD_INVALID_TEXT),
+    ],
+)
+def test_web_offer_selected_non_int_ids_return_safe_text_without_verify_call(partner_id, offer_id, expected):
+    reset_user_state(7106)
+    state = get_user_state(7106)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {str(partner_id): {"id": partner_id, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {str(offer_id): {"id": offer_id, "partner_id": partner_id, "title": "Offer"}}
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7106, "bot-token", partner_id, offer_id, offer_required=True)
+
+    assert message == expected
+    assert client.verification_calls == []
+
+
+@pytest.mark.parametrize(
+    ("partner_id", "partners_cache", "expected"),
+    [
+        (None, {"11": {"id": 11}}, main.PARTNER_PAYLOAD_INVALID_TEXT),
+        (11, {}, main.PARTNER_CACHE_STALE_TEXT),
+        ("uuid-partner", {"uuid-partner": {"id": "uuid-partner"}}, main.PARTNER_PAYLOAD_INVALID_TEXT),
+    ],
+)
+def test_web_get_privilege_missing_stale_non_int_partner_returns_safe_text(partner_id, partners_cache, expected):
+    reset_user_state(7107)
+    state = get_user_state(7107)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = partners_cache
+    client = WebPartnerFlowClient()
+
+    message, _keyboard = main.handle_web_offer_selected(client, 7107, "bot-token", partner_id, None)
+
+    assert message == expected
+    assert client.verification_calls == []
+
+
+def test_legacy_partner_selected_invalid_id_helpers_no_longer_raise_generic_exception():
+    assert main.safe_int_id("not-an-int") is None
+    assert main.normalize_payload_id("  legacy-id  ") == "legacy-id"
+
+
 def test_web_partner_selected_loads_offers_and_caches_without_legacy_services():
     reset_user_state(7001)
     state = get_user_state(7001)
@@ -1007,7 +1120,10 @@ def test_web_offer_without_token_returns_link_required_text():
 
 def test_web_verify_no_subscription_returns_pay_instruction():
     reset_user_state(7004)
-    get_user_state(7004)["web_client_token"] = "client-token"
+    state = get_user_state(7004)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {"5": {"id": 5, "partner_id": 11, "title": "Скидка на уход"}}
     client = WebPartnerFlowClient(verification_error=WebApiError("forbidden", status_code=403, detail="no_subscription"))
 
     message, keyboard_json = main.handle_web_offer_selected(client, 7004, "bot-token", 11, 5)
@@ -1018,7 +1134,10 @@ def test_web_verify_no_subscription_returns_pay_instruction():
 
 def test_web_verify_404_returns_unavailable_text():
     reset_user_state(7005)
-    get_user_state(7005)["web_client_token"] = "client-token"
+    state = get_user_state(7005)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {"5": {"id": 5, "partner_id": 11, "title": "Скидка на уход"}}
     client = WebPartnerFlowClient(verification_error=WebApiError("not_found", status_code=404))
 
     message, _keyboard = main.handle_web_offer_selected(client, 7005, "bot-token", 11, 5)
@@ -1028,7 +1147,10 @@ def test_web_verify_404_returns_unavailable_text():
 
 def test_web_verify_safe_error_text_does_not_leak_exception_token_or_code():
     reset_user_state(7006)
-    get_user_state(7006)["web_client_token"] = "client-token"
+    state = get_user_state(7006)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
+    state["web_partner_offers_by_id"] = {"5": {"id": 5, "partner_id": 11, "title": "Скидка на уход"}}
     client = WebPartnerFlowClient(verification_error=WebApiError("server_error", status_code=500, detail="token client-token code SECRET-CODE"))
 
     message, _keyboard = main.handle_web_offer_selected(client, 7006, "bot-token", 11, 5)
@@ -1041,7 +1163,9 @@ def test_web_verify_safe_error_text_does_not_leak_exception_token_or_code():
 
 def test_web_get_privilege_without_offer_calls_verify_with_empty_offer_id():
     reset_user_state(7007)
-    get_user_state(7007)["web_client_token"] = "client-token"
+    state = get_user_state(7007)
+    state["web_client_token"] = "client-token"
+    state["web_catalog_partners_by_id"] = {"11": {"id": 11, "name": "Beauty Partner"}}
     client = WebPartnerFlowClient(verification={"code": "NO-OFFER", "status": "active"})
 
     message, _keyboard = main.handle_web_offer_selected(client, 7007, "bot-token", 11, None)
@@ -1183,7 +1307,8 @@ def test_payment_paid_marks_stored_web_request_paid():
 
 def test_payment_paid_without_stored_id_uses_latest_pending_request():
     reset_user_state(7004)
-    get_user_state(7004)["web_client_token"] = "client-token"
+    state = get_user_state(7004)
+    state["web_client_token"] = "client-token"
     client = PaymentWebClient(requests=[{"id": 202, "status": "pending", "amount": 1500}])
 
     message = main.handle_web_payment_paid(client, 7004, "bot-token")
@@ -1196,7 +1321,8 @@ def test_payment_paid_without_stored_id_uses_latest_pending_request():
 
 def test_payment_paid_without_any_request_asks_to_create_payment():
     reset_user_state(7005)
-    get_user_state(7005)["web_client_token"] = "client-token"
+    state = get_user_state(7005)
+    state["web_client_token"] = "client-token"
     client = PaymentWebClient(requests=[])
 
     message = main.handle_web_payment_paid(client, 7005, "bot-token")
@@ -1207,7 +1333,8 @@ def test_payment_paid_without_any_request_asks_to_create_payment():
 
 def test_web_payment_errors_return_safe_texts_without_raw_detail():
     reset_user_state(7006)
-    get_user_state(7006)["web_client_token"] = "client-token"
+    state = get_user_state(7006)
+    state["web_client_token"] = "client-token"
     client = PaymentWebClient(create_error=WebApiError("server_error", status_code=500, detail="raw boom"))
 
     message, _keyboard = main.handle_web_payment_request(client, 7006, "bot-token")
