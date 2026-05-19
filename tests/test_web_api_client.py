@@ -268,6 +268,17 @@ def test_get_client_profile_builds_correct_authorized_request():
     assert call["headers"]["Authorization"] == "Bearer client-token"
 
 
+def test_get_active_cities_uses_active_filter():
+    session = FakeSession(response=FakeResponse(payload=[{"name": "Новосибирск", "slug": "novosibirsk"}]))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.get_active_cities() == [{"name": "Новосибирск", "slug": "novosibirsk"}]
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://bloomclub.ru/api/v1/cities"
+    assert call["params"] == {"active": True}
+
+
 def test_get_client_catalog_partners_builds_authorized_request_with_filters():
     payload = [{"id": 1, "name": "Beauty"}]
     session = FakeSession(response=FakeResponse(payload=payload))
@@ -386,6 +397,16 @@ def test_update_client_profile_uses_patch_me_endpoint():
     }
     assert "city" not in call["json"]
     assert call["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_update_client_profile_sends_custom_city_without_unsupported_city_field():
+    session = FakeSession(response=FakeResponse(payload={"ok": True}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    client.update_client_profile("client-token", "Анна", "+7 999 123-45-67", "anna@mail.ru", custom_city="Кемерово")
+    call = session.calls[0]
+    assert call["json"]["custom_city"] == "Кемерово"
+    assert "city" not in call["json"]
 
 
 def test_mark_client_payment_paid_posts_authorized_comment():

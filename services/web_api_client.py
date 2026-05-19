@@ -108,6 +108,10 @@ class WebApiClient:
         payload = self.request("GET", "/clients/me", token=token)
         return payload if isinstance(payload, dict) else {}
 
+    def get_active_cities(self) -> list[dict]:
+        payload = self.request("GET", "/cities", params={"active": True}) or []
+        return payload if isinstance(payload, list) else []
+
     def get_client_me(self, token: str) -> Any:
         return self.get_client_profile(token)
 
@@ -118,6 +122,7 @@ class WebApiClient:
         phone: str,
         email: str,
         city_slug: str | None = None,
+        custom_city: str | None = None,
     ) -> dict:
         payload: dict[str, Any] = {
             "full_name": full_name,
@@ -126,6 +131,8 @@ class WebApiClient:
         }
         if city_slug:
             payload["city_slug"] = city_slug
+        if custom_city:
+            payload["custom_city"] = custom_city
         payload = self.request(
             "PATCH",
             "/clients/me",

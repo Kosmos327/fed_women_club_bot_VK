@@ -1732,11 +1732,17 @@ def test_stale_partner_number_returns_safe_fallback_text():
 
 
 class ProfileSurveyClient:
-    def __init__(self, error=None):
+    def __init__(self, error=None, cities=None):
         self.error = error
         self.calls = []
+        self.cities = cities or []
 
-    def update_client_profile(self, token, full_name, phone, email, city_slug=None):
+    def get_active_cities(self):
+        if self.error:
+            raise self.error
+        return self.cities
+
+    def update_client_profile(self, token, full_name, phone, email, city_slug=None, custom_city=None):
         self.calls.append(
             {
                 "token": token,
@@ -1744,6 +1750,7 @@ class ProfileSurveyClient:
                 "phone": phone,
                 "email": email,
                 "city_slug": city_slug,
+                "custom_city": custom_city,
             }
         )
         if self.error:
@@ -1759,7 +1766,7 @@ def test_profile_survey_save_uses_city_slug_for_novosibirsk_and_done_text():
     ok, text = main.save_profile_survey_data(
         client,
         8201,
-        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city_slug": "novosibirsk"},
     )
 
     assert ok is True
@@ -1771,11 +1778,12 @@ def test_profile_survey_save_uses_city_slug_for_novosibirsk_and_done_text():
             "phone": "8999444354",
             "email": "danka2442@mail.ru",
             "city_slug": "novosibirsk",
+            "custom_city": None,
         }
     ]
 
 
-def test_profile_survey_save_unknown_city_sends_without_city_slug():
+def test_profile_survey_save_custom_city_sends_without_city_slug():
     reset_user_state(8202)
     get_user_state(8202)["web_client_token"] = "client-token"
     client = ProfileSurveyClient()
@@ -1783,11 +1791,12 @@ def test_profile_survey_save_unknown_city_sends_without_city_slug():
     ok, _text = main.save_profile_survey_data(
         client,
         8202,
-        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Томск"},
+        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "custom_city": "Кемерово"},
     )
 
     assert ok is True
     assert client.calls[0]["city_slug"] is None
+    assert client.calls[0]["custom_city"] == "Кемерово"
 
 
 def test_profile_survey_save_404_returns_fallback_and_safe_logs(caplog):
@@ -1799,7 +1808,7 @@ def test_profile_survey_save_404_returns_fallback_and_safe_logs(caplog):
         ok, text = main.save_profile_survey_data(
             client,
             8203,
-            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city_slug": "novosibirsk"},
         )
 
     assert ok is False
@@ -1821,9 +1830,23 @@ def test_profile_survey_save_without_web_token_skips_update_and_returns_fallback
         ok, text = main.save_profile_survey_data(
             client,
             8204,
-            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city_slug": "novosibirsk"},
         )
 
     assert ok is False
     assert text == main.PROFILE_SURVEY_SAVE_FAILED_TEXT
     assert client.calls == []
+
+
+def test_get_active_survey_cities_returns_only_valid_entries():
+    client = ProfileSurveyClient(
+        cities=[
+            {"name": "Новосибирск", "slug": "novosibirsk"},
+            {"name": "Череповец", "slug": "cherepovets"},
+            {"name": "Без слага"},
+        ]
+    )
+    assert main.get_active_survey_cities(client, 1) == [
+        {"name": "Новосибирск", "slug": "novosibirsk"},
+        {"name": "Череповец", "slug": "cherepovets"},
+    ]

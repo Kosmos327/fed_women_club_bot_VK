@@ -6,13 +6,13 @@ from keyboards import (
     BUTTON_MAIN_MENU,
     BUTTON_PASSWORD_SETUP,
     BUTTON_WEB_LOGIN,
-    CITIES,
     WOMEN_CATEGORIES,
     get_categories_keyboard,
     get_city_keyboard,
     get_main_keyboard,
     get_codes_filter_keyboard,
     get_password_setup_keyboard,
+    get_profile_survey_city_keyboard,
     get_web_onboarding_keyboard,
 )
 
@@ -63,9 +63,33 @@ def test_categories_match_women_club_list():
 def test_city_keyboard_is_compact_for_vk_limits():
     labels = _labels(get_city_keyboard())
 
-    assert CITIES == ["Новосибирск", "Москва", "Санкт-Петербург", "Екатеринбург", "Казань"]
     assert labels == ["Новосибирск", "Другой город", "Назад в меню"]
     assert len(json.loads(get_city_keyboard())["buttons"]) <= 5
+
+
+def test_profile_survey_city_keyboard_uses_web_city_rows_and_respects_vk_row_limit():
+    labels = _labels(
+        get_profile_survey_city_keyboard(
+            [
+                {"name": "Новосибирск", "slug": "novosibirsk"},
+                {"name": "Череповец", "slug": "cherepovets"},
+                {"name": "Томск", "slug": "tomsk"},
+                {"name": "Казань", "slug": "kazan"},
+            ]
+        )
+    )
+
+    assert labels == ["Новосибирск", "Череповец", "Томск", "Другой город", "Пропустить", BUTTON_MAIN_MENU]
+    assert _row_count(
+        get_profile_survey_city_keyboard(
+            [
+                {"name": "Новосибирск", "slug": "novosibirsk"},
+                {"name": "Череповец", "slug": "cherepovets"},
+                {"name": "Томск", "slug": "tomsk"},
+                {"name": "Казань", "slug": "kazan"},
+            ]
+        )
+    ) <= 5
 
 
 def _actions(keyboard_json: str) -> list[dict]:

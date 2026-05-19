@@ -161,15 +161,17 @@ def get_city_keyboard() -> str:
     )
 
 
-def get_profile_survey_city_keyboard() -> str:
-    return _keyboard(
-        [
-            [_button("Новосибирск", "profile_city_selected", "primary", city="Новосибирск")],
-            [_button(BUTTON_OTHER_CITY, "profile_city_other")],
-            [_button(BUTTON_SKIP, "profile_survey_skip")],
-            [_button(BUTTON_MAIN_MENU, "main_menu")],
-        ]
-    )
+def get_profile_survey_city_keyboard(cities: list[dict] | None = None) -> str:
+    rows: list[list[dict]] = []
+    for city in (cities or [])[:3]:
+        name = str(city.get("name") or "").strip()
+        slug = str(city.get("slug") or "").strip()
+        if not name or not slug:
+            continue
+        rows.append([_button(name, "profile_city_selected", "primary", city_name=name, city_slug=slug)])
+    rows.append([_button(BUTTON_OTHER_CITY, "profile_city_other"), _button(BUTTON_SKIP, "profile_survey_skip")])
+    rows.append([_button(BUTTON_MAIN_MENU, "main_menu")])
+    return _keyboard(rows[:VK_KEYBOARD_MAX_ROWS])
 
 
 def get_profile_survey_done_keyboard() -> str:
