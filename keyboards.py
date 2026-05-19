@@ -15,6 +15,7 @@ BUTTON_MAIN_MENU = "🏠 Главное меню"
 BUTTON_PASSWORD_SETUP = "Установить новый пароль"
 BUTTON_WEB_LOGIN = "Открыть WEB-кабинет"
 BUTTON_OTHER_CITY = "Другой город"
+BUTTON_SKIP = "Пропустить"
 BUTTON_MORE_PARTNERS = "Ещё партнёры"
 BUTTON_CHANGE_CITY = "Сменить город"
 BUTTON_BACK_TO_PARTNERS = "Назад к партнёрам"
@@ -156,6 +157,27 @@ def get_city_keyboard() -> str:
             [_button("Новосибирск", "city_selected", "primary", city="Новосибирск")],
             [_button(BUTTON_OTHER_CITY, "city_other")],
             [_button("Назад в меню", "main_menu")],
+        ]
+    )
+
+
+def get_profile_survey_city_keyboard() -> str:
+    return _keyboard(
+        [
+            [_button("Новосибирск", "profile_city_selected", "primary", city="Новосибирск")],
+            [_button(BUTTON_OTHER_CITY, "profile_city_other")],
+            [_button(BUTTON_SKIP, "profile_survey_skip")],
+            [_button(BUTTON_MAIN_MENU, "main_menu")],
+        ]
+    )
+
+
+def get_profile_survey_done_keyboard() -> str:
+    return _keyboard(
+        [
+            [_button(BUTTON_PARTNERS, "partners", "primary")],
+            [_button(BUTTON_SUBSCRIPTION, "subscription", "primary")],
+            [_button(BUTTON_MAIN_MENU, "main_menu")],
         ]
     )
 

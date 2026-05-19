@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -54,6 +55,8 @@ from keyboards import (
     get_services_keyboard,
     get_verify_error_keyboard,
     get_verify_success_keyboard,
+    get_profile_survey_city_keyboard,
+    get_profile_survey_done_keyboard,
 )
 from routing import is_link_code_command, parse_code_command, parse_link_code_command, parse_partner_command, parse_service_command, parse_verify_partner_command
 from services.backend_gateway import BackendApiError, BackendGateway
@@ -79,6 +82,19 @@ from texts import (
     PARTNERS_UNKNOWN_CATEGORY_TEXT,
     PARTNERS_WEB_LINK_REQUIRED_TEXT,
     PARTNERS_WEB_UNAVAILABLE_TEXT,
+    PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT,
+    PROFILE_SURVEY_CITY_PROMPT_TEXT,
+    PROFILE_SURVEY_CITY_SKIPPED_HINT_TEXT,
+    PROFILE_SURVEY_DONE_TEXT,
+    PROFILE_SURVEY_EMAIL_INVALID_TEXT,
+    PROFILE_SURVEY_EMAIL_PROMPT_TEXT,
+    PROFILE_SURVEY_INTRO_TEXT,
+    PROFILE_SURVEY_NAME_INVALID_TEXT,
+    PROFILE_SURVEY_NEEDS_CONTACTS_TEXT,
+    PROFILE_SURVEY_PHONE_INVALID_TEXT,
+    PROFILE_SURVEY_PHONE_PROMPT_TEXT,
+    PROFILE_SURVEY_SAVE_FAILED_TEXT,
+    PROFILE_SURVEY_SKIP_TEXT,
     NO_SUBSCRIPTION_TEXT,
     PARTNERS_FOUND_TEXT,
     PARTNERS_INTRO_TEXT,
@@ -1753,6 +1769,22 @@ def is_new_join_club_account(response: dict) -> bool:
     return response.get("is_new") is True and extract_temporary_password(response) is not None
 
 
+def has_required_profile_contacts(profile: dict | None) -> bool:
+    data = profile if isinstance(profile, dict) else {}
+    return all(_is_filled(data.get(key)) for key in ("full_name", "phone", "email", "city"))
+
+
+def get_survey_prompt_for_missing_profile(profile: dict | None) -> str:
+    return PROFILE_SURVEY_INTRO_TEXT if not isinstance(profile, dict) else f"{PROFILE_SURVEY_NEEDS_CONTACTS_TEXT}\n\n1/4 Напишите ваше имя:"
+
+
+def start_profile_survey(vk_user_id: int | str) -> tuple[str, str]:
+    state = get_user_state(int(vk_user_id))
+    state["profile_survey_step"] = "name"
+    state["profile_survey_data"] = {}
+    return PROFILE_SURVEY_INTRO_TEXT, get_nav_keyboard()
+
+
 def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot_token: str, selected_city: str | None = None) -> tuple[str, str]:
     selected_city_slug = get_web_known_city_slug(selected_city)
     retried_without_city = False
@@ -1841,6 +1873,79 @@ def main() -> None:
                         send_message(vk_api, peer_id, MAIN_MENU_TEXT, get_main_keyboard())
                         continue
                     state = get_user_state(from_id)
+                    survey_step = state.get("profile_survey_step")
+                    if action == "profile_survey_skip" or (survey_step and text == "пропустить"):
+                        state.pop("profile_survey_step", None)
+                        state.pop("profile_survey_data", None)
+                        send_message(vk_api, peer_id, PROFILE_SURVEY_SKIP_TEXT, get_main_keyboard())
+                        continue
+                    if survey_step == "name":
+                        name = (raw_text or "").strip()
+                        if len(name) < 2 or len(name) > 80:
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_NAME_INVALID_TEXT, get_nav_keyboard())
+                            continue
+                        state["profile_survey_data"] = {"full_name": name}
+                        state["profile_survey_step"] = "phone"
+                        send_message(vk_api, peer_id, PROFILE_SURVEY_PHONE_PROMPT_TEXT, get_nav_keyboard())
+                        continue
+                    if survey_step == "phone":
+                        phone = (raw_text or "").strip()
+                        if len(phone) < 6 or len(phone) > 25 or not re.fullmatch(r"[+\d()\-\s]+", phone):
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_PHONE_INVALID_TEXT, get_nav_keyboard())
+                            continue
+                        state.setdefault("profile_survey_data", {})["phone"] = phone
+                        state["profile_survey_step"] = "email"
+                        send_message(vk_api, peer_id, PROFILE_SURVEY_EMAIL_PROMPT_TEXT, get_nav_keyboard())
+                        continue
+                    if survey_step == "email":
+                        email = (raw_text or "").strip()
+                        if len(email) > 120 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_EMAIL_INVALID_TEXT, get_nav_keyboard())
+                            continue
+                        state.setdefault("profile_survey_data", {})["email"] = email
+                        state["profile_survey_step"] = "city"
+                        send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard())
+                        continue
+                    if survey_step == "city_text":
+                        city = (raw_text or "").strip()
+                        if not city:
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT, get_nav_keyboard())
+                            continue
+                        state.setdefault("profile_survey_data", {})["city"] = city
+                        state["profile_survey_step"] = "saving"
+                    if survey_step == "city":
+                        if action == "profile_city_selected":
+                            state.setdefault("profile_survey_data", {})["city"] = str(payload.get("city") or "Новосибирск")
+                            state["profile_survey_step"] = "saving"
+                        elif action == "profile_city_other":
+                            state["profile_survey_step"] = "city_text"
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT, get_nav_keyboard())
+                            continue
+                        elif action == "profile_survey_skip":
+                            state.setdefault("profile_survey_data", {})["city"] = None
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_SKIPPED_HINT_TEXT, get_main_keyboard())
+                            state.pop("profile_survey_step", None)
+                            state.pop("profile_survey_data", None)
+                            continue
+                        else:
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard())
+                            continue
+                    if state.get("profile_survey_step") == "saving":
+                        try:
+                            data = state.get("profile_survey_data") or {}
+                            web_client.update_client_profile(
+                                get_web_client_token(from_id) or "",
+                                full_name=str(data.get("full_name") or ""),
+                                phone=str(data.get("phone") or ""),
+                                email=str(data.get("email") or ""),
+                                city=data.get("city"),
+                            )
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_DONE_TEXT, get_profile_survey_done_keyboard())
+                        except WebApiError:
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_SAVE_FAILED_TEXT, get_main_keyboard())
+                        state.pop("profile_survey_step", None)
+                        state.pop("profile_survey_data", None)
+                        continue
                     link_code = parse_link_code_command(raw_text)
                     if link_code:
                         send_message(vk_api, peer_id, handle_vk_link_code(web_client, from_id, link_code, config.bot_api_token), get_main_keyboard())
@@ -1860,6 +1965,12 @@ def main() -> None:
                             selected_city=state.get("selected_city"),
                         )
                         send_message(vk_api, peer_id, message_text, keyboard)
+                        token = get_web_client_token(from_id)
+                        if token:
+                            profile = web_client.get_client_profile(token)
+                            if not has_required_profile_contacts(profile):
+                                prompt, prompt_keyboard = start_profile_survey(from_id)
+                                send_message(vk_api, peer_id, prompt, prompt_keyboard)
                         continue
                     if action == "city_select" or text == normalize_text(BUTTON_CITY):
                         send_message(vk_api, peer_id, "Выберите город", get_city_keyboard())

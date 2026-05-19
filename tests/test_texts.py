@@ -37,6 +37,20 @@ def test_city_selection_text():
     assert main.format_city_selected_message("Казань") == "Город выбран: Казань. Теперь покажем партнёров и предложения рядом."
 
 
+def test_profile_survey_starts_and_stores_state():
+    reset_user_state(9101)
+    text, keyboard = main.start_profile_survey(9101)
+    assert "1/4 Напишите ваше имя" in text
+    assert get_user_state(9101)["profile_survey_step"] == "name"
+    assert get_user_state(9101)["profile_survey_data"] == {}
+    assert "Главное меню" in keyboard
+
+
+def test_profile_required_contacts_check():
+    assert main.has_required_profile_contacts({"full_name": "Анна", "phone": "+7999", "email": "a@a.ru", "city": "Новосибирск"}) is True
+    assert main.has_required_profile_contacts({"full_name": "Анна", "phone": "", "email": "a@a.ru", "city": "Новосибирск"}) is False
+
+
 class VerifyGateway:
     def verify_partner(self, vk_user_id, partner_id):
         return {
