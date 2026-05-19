@@ -35,7 +35,7 @@ import main
 
 
 def test_city_selection_text():
-    assert main.format_city_selected_message("Казань") == "Город выбран: Казань. Теперь покажем партнёров и предложения рядом."
+    assert main.format_city_selected_message("Казань") == "Город выбран: Казань. Показываем партнёров и предложения рядом."
 
 
 def test_profile_survey_starts_and_stores_state():
@@ -78,7 +78,7 @@ def test_verify_success_text_mentions_privilege_and_five_minutes():
 def test_no_subscription_text_is_adapted_to_privilege():
     message, _keyboard = main.handle_verify_partner(NoSubscriptionGateway(), 1, 2)
 
-    assert "Подписка не активна." in message
+    assert "Подписка пока не активна." in message
     assert "воспользоваться привилегией" in message
 
 
@@ -163,7 +163,7 @@ def test_link_success_handler_stores_token_user_and_returns_success_text(caplog)
     assert get_web_client_token(2001) == "client-token"
     assert get_user_state(2001)["web_client_user"] == {"email": "user@example.com", "role": "member"}
     assert main.restore_web_client_session(client, 2001, "bot-token") is True
-    assert "VK привязан к WEB-кабинету" in message
+    assert "VK привязан к личному кабинету" in message
     assert "подписка, партнёры и мои привилегии" in message
     log_text = caplog.text
     assert "client-token" not in log_text
@@ -227,7 +227,7 @@ def test_link_conflict_maps_to_conflict_ux():
 def test_link_401_403_maps_to_service_auth_ux(error):
     message = main.handle_vk_link_code(LinkErrorClient(error), 2003, "ABC12345", "bot-token")
 
-    assert "Не удалось привязать VK к WEB-кабинету" in message
+    assert "Не удалось привязать VK к личному кабинету" in message
     assert "401" not in message
     assert "403" not in message
 
@@ -235,7 +235,7 @@ def test_link_401_403_maps_to_service_auth_ux(error):
 def test_link_web_unavailable_maps_to_unavailable_ux():
     message = main.handle_vk_link_code(LinkErrorClient(WebApiError("web_unavailable")), 2004, "ABC12345", "bot-token")
 
-    assert "WEB-кабинет временно недоступен" in message
+    assert "Личный кабинет временно недоступен" in message
 
 
 class JoinSuccessClient:
@@ -302,9 +302,9 @@ def test_join_success_new_user_text_contains_login_temporary_password_and_open_b
     message, keyboard = main.handle_join_club_result(client, 3001, "bot-token", selected_city="Новосибирск")
 
     assert message == (
-        "💗 WEB-кабинет создан\n"
+        "💗 Личный кабинет создан\n"
         "\n"
-        "VK уже привязан к вашему WEB-кабинету.\n"
+        "VK уже привязан к вашему личному кабинету.\n"
         "\n"
         "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.\n"
         "\n"
@@ -322,7 +322,7 @@ def test_join_success_new_user_text_contains_login_temporary_password_and_open_b
     assert "password_hash" not in message
     assert "must-not-leak" not in message
     actions = _keyboard_actions(keyboard)
-    assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
+    assert actions[0] == {"type": "open_link", "label": "Открыть личный кабинет", "link": "https://bloomclub.ru/"}
     assert "Установить новый пароль" not in _keyboard_labels(keyboard)
     assert get_web_client_token(3001) == "client-token"
     assert get_user_state(3001)["web_client_user"]["email"] == login
@@ -350,9 +350,9 @@ def test_join_success_existing_user_text_contains_login_and_setup_button():
     message, keyboard = main.handle_join_club_result(client, 3002, "bot-token")
 
     assert message == (
-        "💗 WEB-кабинет уже создан\n"
+        "💗 Личный кабинет уже создан\n"
         "\n"
-        "VK уже привязан к вашему WEB-кабинету.\n"
+        "VK уже привязан к вашему личному кабинету.\n"
         "\n"
         "Вы можете войти на bloomclub.ru.\n"
         "\n"
@@ -366,7 +366,7 @@ def test_join_success_existing_user_text_contains_login_and_setup_button():
     assert "password_hash" not in message
     assert "must-not-leak" not in message
     actions = _keyboard_actions(keyboard)
-    assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
+    assert actions[0] == {"type": "open_link", "label": "Открыть личный кабинет", "link": "https://bloomclub.ru/"}
     assert actions[1] == {"type": "open_link", "label": "Установить новый пароль", "link": setup_url}
     assert get_web_client_token(3002) == "client-token"
     assert "temporary_password" not in get_user_state(3002)
@@ -406,13 +406,13 @@ def test_join_success_backward_compatible_missing_temporary_password_is_safe_fal
 
     message, keyboard = main.handle_join_club_result(client, 3007, "bot-token")
 
-    assert "💗 WEB-кабинет уже создан" in message
+    assert "💗 Личный кабинет уже создан" in message
     assert "Логин: user@example.com" in message
     assert "Пароль:" not in message
     assert "temporary_password" not in message
     assert "password_hash" not in message
     assert "must-not-leak" not in message
-    assert "Открыть WEB-кабинет" in _keyboard_labels(keyboard)
+    assert "Открыть личный кабинет" in _keyboard_labels(keyboard)
     assert get_web_client_token(3007) == "client-token"
 
 
@@ -434,7 +434,7 @@ def test_join_success_existing_user_with_invalid_setup_url_has_only_open_button(
     assert "Пароль уже был установлен ранее" in message
     assert "javascript:alert" not in message
     labels = _keyboard_labels(keyboard)
-    assert "Открыть WEB-кабинет" in labels
+    assert "Открыть личный кабинет" in labels
     assert "Установить новый пароль" not in labels
 
 
@@ -457,9 +457,9 @@ def test_join_success_existing_user_with_web_login_url_uses_returned_open_link()
     message, keyboard = main.handle_join_club_result(client, 3009, "bot-token")
 
     actions = _keyboard_actions(keyboard)
-    assert "💗 WEB-кабинет уже создан" in message
+    assert "💗 Личный кабинет уже создан" in message
     assert "Логин: user@example.com" in message
-    assert actions[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": web_login_url}
+    assert actions[0] == {"type": "open_link", "label": "Открыть личный кабинет", "link": web_login_url}
     assert actions[1] == {"type": "open_link", "label": "Установить новый пароль", "link": setup_url}
 
 
@@ -476,10 +476,10 @@ def test_join_success_missing_login_does_not_crash():
 
     message, keyboard = main.handle_join_club_result(client, 3014, "bot-token")
 
-    assert "💗 WEB-кабинет создан" in message
-    assert "Логин будет доступен в WEB-кабинете" in message
+    assert "💗 Личный кабинет создан" in message
+    assert "Логин будет доступен в личном кабинете" in message
     assert "Пароль: tmp-pass-123" in message
-    assert "Открыть WEB-кабинет" in _keyboard_labels(keyboard)
+    assert "Открыть личный кабинет" in _keyboard_labels(keyboard)
 
 
 def test_join_success_new_user_with_invalid_web_login_url_uses_safe_default_open_link():
@@ -497,9 +497,9 @@ def test_join_success_new_user_with_invalid_web_login_url_uses_safe_default_open
 
     message, keyboard = main.handle_join_club_result(client, 3016, "bot-token")
 
-    assert "💗 WEB-кабинет создан" in message
+    assert "💗 Личный кабинет создан" in message
     assert "javascript:alert" not in message
-    assert _keyboard_actions(keyboard)[0] == {"type": "open_link", "label": "Открыть WEB-кабинет", "link": "https://bloomclub.ru/"}
+    assert _keyboard_actions(keyboard)[0] == {"type": "open_link", "label": "Открыть личный кабинет", "link": "https://bloomclub.ru/"}
 
 
 def test_join_success_existing_user_uses_reset_password_url_alias():
@@ -541,7 +541,7 @@ def test_join_success_new_user_ignores_setup_url_and_returns_open_button():
     assert "Пароль: tmp-pass-123" in message
     assert password_setup_url not in message
     assert "Установить новый пароль" not in _keyboard_labels(keyboard)
-    assert _keyboard_actions(keyboard)[0]["label"] == "Открыть WEB-кабинет"
+    assert _keyboard_actions(keyboard)[0]["label"] == "Открыть личный кабинет"
     assert "password_setup_url" not in get_user_state(3010)
 
 
@@ -560,7 +560,7 @@ def test_join_success_existing_user_without_setup_url_still_returns_open_button(
     _message, keyboard = main.handle_join_club_result(client, 3011, "bot-token")
 
     labels = _keyboard_labels(keyboard)
-    assert "Открыть WEB-кабинет" in labels
+    assert "Открыть личный кабинет" in labels
     assert "Установить новый пароль" not in labels
 
 
@@ -599,7 +599,7 @@ def test_link_code_flow_keyboard_remains_main_menu_without_url_button():
     _message = main.handle_vk_link_code(LinkSuccessClient(), 3013, "ABC12345", "bot-token")
     keyboard = keyboards.get_main_keyboard()
 
-    assert "Задать пароль для WEB-кабинета" not in _keyboard_labels(keyboard)
+    assert "Задать пароль для личного кабинета" not in _keyboard_labels(keyboard)
     assert _keyboard_labels(keyboard) == [
         "💗 Присоединиться к клубу",
         "💗 Подписка",
@@ -629,7 +629,7 @@ def test_join_missing_onboarding_token_returns_clear_error_and_does_not_crash():
 
     message, keyboard = main.handle_join_club_result(client, 3017, "bot-token")
 
-    assert "не удалось открыть сессию" in message.lower()
+    assert "не удалось завершить вход" in message.lower()
     assert keyboard == keyboards.get_main_keyboard()
     assert get_web_client_token(3017) is None
 
@@ -672,7 +672,7 @@ class SubscriptionGatewayShouldNotBeCalled:
 
 
 def test_format_web_subscription_active_variants():
-    assert "Подписка активна до: 01.06.2026" in main.format_web_subscription_message(
+    assert "Подписка активна до 01.06.2026" in main.format_web_subscription_message(
         {"has_active_subscription": True, "ends_at": "2026-06-01T00:00:00Z"}
     )
     assert "Подписка активна" in main.format_web_subscription_message({"is_active": True, "expires_at": "2026-07-02"})
@@ -681,9 +681,9 @@ def test_format_web_subscription_active_variants():
 
 
 def test_format_web_subscription_inactive_variants():
-    assert "Подписка не активна" in main.format_web_subscription_message({"has_active_subscription": False})
-    assert "Подписка не активна" in main.format_web_subscription_message({"is_active": False})
-    assert "Подписка не активна" in main.format_web_subscription_message({"status": "expired"})
+    assert "Подписка пока не активна" in main.format_web_subscription_message({"has_active_subscription": False})
+    assert "Подписка пока не активна" in main.format_web_subscription_message({"is_active": False})
+    assert "Подписка пока не активна" in main.format_web_subscription_message({"status": "expired"})
     assert main.is_web_subscription_active({"paid_until": "2000-01-01T00:00:00Z"}) is False
 
 
@@ -694,7 +694,7 @@ def test_subscription_handler_uses_web_api_when_web_token_present_not_legacy():
 
     message = main.handle_subscription_status(client, 4001, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
 
-    assert "Подписка активна до: 01.06.2026" in message
+    assert "Подписка активна до 01.06.2026" in message
     assert client.bound_token_calls == []
     assert client.subscription_calls == ["client-token"]
 
@@ -708,7 +708,7 @@ def test_subscription_handler_restores_web_token_then_uses_web_api_not_legacy():
 
     message = main.handle_subscription_status(client, 4002, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
 
-    assert "Подписка активна до: 02.06.2026" in message
+    assert "Подписка активна до 02.06.2026" in message
     assert get_web_client_token(4002) == "restored-token"
     assert client.subscription_calls == ["restored-token"]
 
@@ -719,7 +719,7 @@ def test_subscription_handler_without_web_token_returns_link_instruction_not_leg
 
     message = main.handle_subscription_status(client, 4003, "bot-token", gateway=SubscriptionGatewayShouldNotBeCalled())
 
-    assert "WEB-кабинет" in message
+    assert "личный кабинет" in message
     assert "Привязать КОД" in message
     assert client.subscription_calls == []
 
@@ -890,7 +890,7 @@ def test_empty_active_web_verifications_show_partner_instruction_not_subscribe()
 
     message = main.handle_my_codes_filter(client, 5004, "bot-token", status="active")
 
-    assert message == "Активных привилегий пока нет. Выберите предложение в каталоге партнёров."
+    assert message == "Активных кодов пока нет. Выберите предложение в каталоге партнёров."
     assert client.subscription_calls == []
 
 
@@ -946,7 +946,7 @@ def test_codes_filter_without_web_token_returns_link_instruction_not_legacy():
         gateway=CodesGatewayShouldNotBeCalled(),
     )
 
-    assert "WEB-кабинет" in message
+    assert "личный кабинет" in message
     assert "привяжите VK" in message
     assert "💗 Присоединиться к клубу" in message
     assert client.verification_calls == []
@@ -1034,7 +1034,7 @@ def test_partners_start_without_web_token_returns_link_instruction():
 
     message, _keyboard = main.handle_partners_start(client, 6002, "bot-token")
 
-    assert "WEB-кабинет" in message
+    assert "личный кабинет" in message
     assert "💗 Присоединиться к клубу" in message
     assert client.profile_calls == []
 
@@ -1171,7 +1171,7 @@ def test_category_selected_web_api_error_returns_safe_text_without_raw_exception
 
     message, _keyboard = main.handle_category_selected(client, 6005, "bot-token", category="Красота", category_slug="beauty")
 
-    assert "Не удалось получить партнёров из WEB-кабинета" in message
+    assert "Не удалось получить партнёров из личного кабинета" in message
     assert "client-token" not in message
     assert "SECRET" not in message
     assert "server_error" not in message
@@ -1396,7 +1396,7 @@ def test_web_offer_without_token_returns_link_required_text():
 
     message, _keyboard = main.handle_web_offer_selected(client, 7003, "bot-token", 11, 5)
 
-    assert "WEB-кабинет" in message
+    assert "личный кабинет" in message
     assert "💗 Присоединиться к клубу" in message
     assert client.verification_calls == []
 
@@ -1551,7 +1551,7 @@ def test_payment_button_with_web_token_creates_web_request_not_legacy():
     assert "349 ₽" in message
     assert "Ожидает оплаты" in message
     assert "✅ Я оплатил" in message
-    assert "администратор проверит" in message.lower()
+    assert "после проверки администратором доступ будет активирован" in message.lower()
     assert get_user_state(7001)["last_payment_request_id"] == 101
     assert client.create_calls == [
         {"token": "client-token", "amount": main.SUBSCRIPTION_PRICE_RUB, "source": "vk", "comment": None}
@@ -1565,7 +1565,7 @@ def test_payment_button_without_web_token_returns_link_required_text():
 
     message, _keyboard = main.handle_web_payment_request(client, 7002, "bot-token")
 
-    assert "WEB-кабинет" in message
+    assert "личный кабинет" in message
     assert "Привязать КОД" in message
     assert "Присоединиться к клубу" in message
     assert client.create_calls == []
@@ -1626,7 +1626,7 @@ def test_web_payment_errors_return_safe_texts_without_raw_detail():
     assert "raw boom" not in message
     assert "server_error" not in message
 
-    assert "WEB-кабинет" in main.map_web_payment_error_to_text(WebApiError("unauthenticated", status_code=401))
+    assert "личный кабинет" in main.map_web_payment_error_to_text(WebApiError("unauthenticated", status_code=401))
     assert main.map_web_payment_error_to_text(WebApiError("not_found", status_code=404)) == texts.PAYMENT_WEB_NOT_FOUND_TEXT
 
 
