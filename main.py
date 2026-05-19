@@ -358,7 +358,7 @@ MY_PRIVILEGES_API_STATUS_BY_FILTER = {
 }
 
 MY_PRIVILEGES_EMPTY_BY_FILTER = {
-    "active": "Активных привилегий пока нет. Выберите предложение в каталоге партнёров.",
+    "active": "Активных кодов пока нет. Выберите предложение в каталоге партнёров.",
     "all": "Привилегий пока нет. Выберите предложение в каталоге партнёров.",
     "used": "Использованных привилегий пока нет.",
     "confirmed": "Использованных привилегий пока нет.",
@@ -1191,7 +1191,7 @@ def handle_category_selected(
 
 
 def format_city_selected_message(city: str) -> str:
-    return f"Город выбран: {city}. Теперь покажем партнёров и предложения рядом."
+    return f"Город выбран: {city}. Показываем партнёров и предложения рядом."
 
 
 WEB_PAYMENT_STATUS_LABELS = {
@@ -1263,10 +1263,10 @@ def format_web_payment_created_message(payment: dict) -> str:
     )
     return "\n\n".join(
         [
-            "Заявка на оплату создана",
+            "Заявка на оплату создана.",
             format_web_payment_request({**payment, "status": payment.get("status") or "pending"}),
             instructions,
-            "После оплаты нажмите «✅ Я оплатил». Подписка не продлевается автоматически: администратор проверит оплату вручную.",
+            "После оплаты нажмите «✅ Я оплатил». После проверки администратором доступ будет активирован.",
         ]
     )
 
@@ -1276,7 +1276,7 @@ def format_web_payment_paid_message(payment: dict) -> str:
         [
             "Спасибо! Мы отметили заявку как оплаченную.",
             format_web_payment_request({**payment, "status": payment.get("status") or "paid"}),
-            "Администратор проверит оплату вручную. Подписка будет обновлена только после подтверждения.",
+            "Администратор проверит оплату вручную. После подтверждения доступ будет активирован.",
         ]
     )
 
@@ -1597,7 +1597,7 @@ def _extract_web_user(payload: dict) -> dict:
 
 def format_link_success(user: dict | None = None) -> str:
     return (
-        "VK привязан к WEB-кабинету. Теперь доступны подписка, партнёры и мои привилегии.\n\n"
+        "VK привязан к личному кабинету. Теперь доступны подписка, партнёры и мои привилегии.\n\n"
         "Откройте главное меню или нажмите нужную кнопку ниже."
     )
 
@@ -1753,7 +1753,7 @@ def _append_login_line(lines: list[str], login: object) -> None:
     if isinstance(login, str) and login.strip():
         lines.append(f"Логин: {login.strip()}")
     else:
-        lines.append("Логин будет доступен в WEB-кабинете.")
+        lines.append("Логин будет доступен в личном кабинете.")
 
 
 def build_join_club_success_text(response: dict, city_retry_without_slug: bool = False) -> str:
@@ -1763,9 +1763,9 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
 
     if is_new_with_password:
         lines = [
-            "💗 WEB-кабинет создан",
+            "💗 Личный кабинет создан",
             "",
-            "VK уже привязан к вашему WEB-кабинету.",
+            "VK уже привязан к вашему личному кабинету.",
             "",
             "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
             "",
@@ -1783,9 +1783,9 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
         )
     else:
         lines = [
-            "💗 WEB-кабинет уже создан",
+            "💗 Личный кабинет уже создан",
             "",
-            "VK уже привязан к вашему WEB-кабинету.",
+            "VK уже привязан к вашему личному кабинету.",
             "",
             "Вы можете войти на bloomclub.ru.",
             "",
