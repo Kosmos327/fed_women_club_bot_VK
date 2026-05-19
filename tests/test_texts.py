@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import sys
 import types
 
@@ -1728,3 +1729,101 @@ def test_stale_partner_number_returns_safe_fallback_text():
     assert (state.get("web_catalog_number_to_partner_id") or {}).get("9") is None
     assert main.PARTNER_CACHE_STALE_TEXT == "Данные устарели. Откройте список партнёров заново."
     assert keyboards.is_valid_keyboard(main.get_partner_stale_keyboard(8002))
+
+
+class ProfileSurveyClient:
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+
+    def update_client_profile(self, token, full_name, phone, email, city_slug=None):
+        self.calls.append(
+            {
+                "token": token,
+                "full_name": full_name,
+                "phone": phone,
+                "email": email,
+                "city_slug": city_slug,
+            }
+        )
+        if self.error:
+            raise self.error
+        return {"ok": True}
+
+
+def test_profile_survey_save_uses_city_slug_for_novosibirsk_and_done_text():
+    reset_user_state(8201)
+    get_user_state(8201)["web_client_token"] = "client-token"
+    client = ProfileSurveyClient()
+
+    ok, text = main.save_profile_survey_data(
+        client,
+        8201,
+        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+    )
+
+    assert ok is True
+    assert text == main.PROFILE_SURVEY_DONE_TEXT
+    assert client.calls == [
+        {
+            "token": "client-token",
+            "full_name": "Данил",
+            "phone": "8999444354",
+            "email": "danka2442@mail.ru",
+            "city_slug": "novosibirsk",
+        }
+    ]
+
+
+def test_profile_survey_save_unknown_city_sends_without_city_slug():
+    reset_user_state(8202)
+    get_user_state(8202)["web_client_token"] = "client-token"
+    client = ProfileSurveyClient()
+
+    ok, _text = main.save_profile_survey_data(
+        client,
+        8202,
+        {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Томск"},
+    )
+
+    assert ok is True
+    assert client.calls[0]["city_slug"] is None
+
+
+def test_profile_survey_save_404_returns_fallback_and_safe_logs(caplog):
+    reset_user_state(8203)
+    get_user_state(8203)["web_client_token"] = "client-token"
+    client = ProfileSurveyClient(error=WebApiError("not_found", status_code=404, detail="token=secret email=a@b.c"))
+
+    with caplog.at_level(logging.WARNING):
+        ok, text = main.save_profile_survey_data(
+            client,
+            8203,
+            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+        )
+
+    assert ok is False
+    assert text == main.PROFILE_SURVEY_SAVE_FAILED_TEXT
+    logs = " ".join(record.getMessage() for record in caplog.records)
+    assert "action=profile_survey_save_failed" in logs
+    assert "endpoint=/api/v1/clients/me" in logs
+    assert "status_code=404" in logs
+    assert "8999444354" not in logs
+    assert "danka2442@mail.ru" not in logs
+    assert "client-token" not in logs
+
+
+def test_profile_survey_save_without_web_token_skips_update_and_returns_fallback(caplog):
+    reset_user_state(8204)
+    client = ProfileSurveyClient()
+
+    with caplog.at_level(logging.WARNING):
+        ok, text = main.save_profile_survey_data(
+            client,
+            8204,
+            {"full_name": "Данил", "phone": "8999444354", "email": "danka2442@mail.ru", "city": "Новосибирск"},
+        )
+
+    assert ok is False
+    assert text == main.PROFILE_SURVEY_SAVE_FAILED_TEXT
+    assert client.calls == []

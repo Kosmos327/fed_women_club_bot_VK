@@ -591,6 +591,38 @@ def log_web_catalog_error(
     )
 
 
+def save_profile_survey_data(web_client: WebApiClient, vk_user_id: int | str, survey_data: dict) -> tuple[bool, str]:
+    token = get_web_client_token(vk_user_id)
+    if not token:
+        logger.warning(
+            "WEB profile survey save skipped action=profile_survey_save_failed vk_user_id=%s endpoint=%s status_code=%s error_type=%s",
+            vk_user_id,
+            "/api/v1/clients/me",
+            None,
+            "missing_web_token",
+        )
+        return False, PROFILE_SURVEY_SAVE_FAILED_TEXT
+    city_slug = get_web_known_city_slug(survey_data.get("city"))
+    try:
+        web_client.update_client_profile(
+            token,
+            full_name=str(survey_data.get("full_name") or ""),
+            phone=str(survey_data.get("phone") or ""),
+            email=str(survey_data.get("email") or ""),
+            city_slug=city_slug,
+        )
+        return True, PROFILE_SURVEY_DONE_TEXT
+    except WebApiError as exc:
+        logger.warning(
+            "WEB profile survey save failed action=profile_survey_save_failed vk_user_id=%s endpoint=%s status_code=%s error_type=%s",
+            vk_user_id,
+            "/api/v1/clients/me",
+            exc.status_code,
+            exc.code,
+        )
+        return False, PROFILE_SURVEY_SAVE_FAILED_TEXT
+
+
 def get_selected_city_slug_from_profile(profile: dict | None, state: dict | None = None) -> str | None:
     profile = extract_web_profile(profile)
     state = state or {}
@@ -1940,18 +1972,14 @@ def main() -> None:
                             send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard())
                             continue
                     if state.get("profile_survey_step") == "saving":
-                        try:
-                            data = state.get("profile_survey_data") or {}
-                            web_client.update_client_profile(
-                                get_web_client_token(from_id) or "",
-                                full_name=str(data.get("full_name") or ""),
-                                phone=str(data.get("phone") or ""),
-                                email=str(data.get("email") or ""),
-                                city=data.get("city"),
-                            )
-                            send_message(vk_api, peer_id, PROFILE_SURVEY_DONE_TEXT, get_profile_survey_done_keyboard())
-                        except WebApiError:
-                            send_message(vk_api, peer_id, PROFILE_SURVEY_SAVE_FAILED_TEXT, get_main_keyboard())
+                        data = state.get("profile_survey_data") or {}
+                        ok, response_text = save_profile_survey_data(web_client, from_id, data)
+                        send_message(
+                            vk_api,
+                            peer_id,
+                            response_text,
+                            get_profile_survey_done_keyboard() if ok else get_main_keyboard(),
+                        )
                         state.pop("profile_survey_step", None)
                         state.pop("profile_survey_data", None)
                         continue
