@@ -111,12 +111,26 @@ class WebApiClient:
     def get_client_me(self, token: str) -> Any:
         return self.get_client_profile(token)
 
-    def update_client_profile(self, token: str, full_name: str, phone: str, email: str, city: str | None = None) -> dict:
+    def update_client_profile(
+        self,
+        token: str,
+        full_name: str,
+        phone: str,
+        email: str,
+        city_slug: str | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "full_name": full_name,
+            "phone": phone,
+            "contact_email": email,
+        }
+        if city_slug:
+            payload["city_slug"] = city_slug
         payload = self.request(
             "PATCH",
-            "/clients/me/profile",
+            "/clients/me",
             token=token,
-            json={"full_name": full_name, "phone": phone, "email": email, "city": city},
+            json=payload,
         ) or {}
         return payload if isinstance(payload, dict) else {}
 
