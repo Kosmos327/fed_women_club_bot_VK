@@ -602,14 +602,16 @@ def save_profile_survey_data(web_client: WebApiClient, vk_user_id: int | str, su
             "missing_web_token",
         )
         return False, PROFILE_SURVEY_SAVE_FAILED_TEXT
-    city_slug = get_web_known_city_slug(survey_data.get("city"))
+    city_slug = survey_data.get("city_slug")
+    custom_city = survey_data.get("custom_city")
     try:
         web_client.update_client_profile(
             token,
             full_name=str(survey_data.get("full_name") or ""),
             phone=str(survey_data.get("phone") or ""),
             email=str(survey_data.get("email") or ""),
-            city_slug=city_slug,
+            city_slug=str(city_slug) if city_slug else None,
+            custom_city=str(custom_city) if custom_city else None,
         )
         return True, PROFILE_SURVEY_DONE_TEXT
     except WebApiError as exc:
@@ -621,6 +623,21 @@ def save_profile_survey_data(web_client: WebApiClient, vk_user_id: int | str, su
             exc.code,
         )
         return False, PROFILE_SURVEY_SAVE_FAILED_TEXT
+
+
+def get_active_survey_cities(web_client: WebApiClient, vk_user_id: int | str) -> list[dict]:
+    try:
+        cities = web_client.get_active_cities()
+    except WebApiError as exc:
+        logger.warning(
+            "WEB cities fetch failed action=profile_survey_city_list vk_user_id=%s endpoint=%s status_code=%s error_type=%s",
+            vk_user_id,
+            "/api/v1/cities?active=true",
+            exc.status_code,
+            exc.code,
+        )
+        return []
+    return [city for city in cities if isinstance(city, dict) and city.get("name") and city.get("slug")]
 
 
 def get_selected_city_slug_from_profile(profile: dict | None, state: dict | None = None) -> str | None:
@@ -1945,31 +1962,49 @@ def main() -> None:
                             continue
                         state.setdefault("profile_survey_data", {})["email"] = email
                         state["profile_survey_step"] = "city"
-                        send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard())
+                        cities = get_active_survey_cities(web_client, from_id)
+                        state["profile_survey_cities"] = cities
+                        if cities:
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard(cities))
+                        else:
+                            send_message(
+                                vk_api,
+                                peer_id,
+                                "Сейчас список городов временно недоступен. Вы можете написать город вручную или пропустить этот шаг.",
+                                get_profile_survey_city_keyboard([]),
+                            )
                         continue
                     if survey_step == "city_text":
                         city = (raw_text or "").strip()
-                        if not city:
+                        if len(city) < 2 or len(city) > 120:
                             send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT, get_nav_keyboard())
                             continue
-                        state.setdefault("profile_survey_data", {})["city"] = city
+                        state.setdefault("profile_survey_data", {})["city_slug"] = None
+                        state.setdefault("profile_survey_data", {})["city_name"] = None
+                        state.setdefault("profile_survey_data", {})["custom_city"] = city
                         state["profile_survey_step"] = "saving"
                     if survey_step == "city":
                         if action == "profile_city_selected":
-                            state.setdefault("profile_survey_data", {})["city"] = str(payload.get("city") or "Новосибирск")
+                            state.setdefault("profile_survey_data", {})["city_slug"] = str(payload.get("city_slug") or "").strip() or None
+                            state.setdefault("profile_survey_data", {})["city_name"] = str(payload.get("city_name") or "").strip() or None
+                            state.setdefault("profile_survey_data", {})["custom_city"] = None
                             state["profile_survey_step"] = "saving"
                         elif action == "profile_city_other":
                             state["profile_survey_step"] = "city_text"
-                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT, get_nav_keyboard())
+                            send_message(vk_api, peer_id, "Напишите ваш город:", get_nav_keyboard())
                             continue
                         elif action == "profile_survey_skip":
-                            state.setdefault("profile_survey_data", {})["city"] = None
+                            state.setdefault("profile_survey_data", {})["city_slug"] = None
+                            state.setdefault("profile_survey_data", {})["city_name"] = None
+                            state.setdefault("profile_survey_data", {})["custom_city"] = None
                             send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_SKIPPED_HINT_TEXT, get_main_keyboard())
                             state.pop("profile_survey_step", None)
                             state.pop("profile_survey_data", None)
+                            state.pop("profile_survey_cities", None)
                             continue
                         else:
-                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard())
+                            cities = state.get("profile_survey_cities") if isinstance(state.get("profile_survey_cities"), list) else []
+                            send_message(vk_api, peer_id, PROFILE_SURVEY_CITY_PROMPT_TEXT, get_profile_survey_city_keyboard(cities))
                             continue
                     if state.get("profile_survey_step") == "saving":
                         data = state.get("profile_survey_data") or {}
@@ -1982,6 +2017,7 @@ def main() -> None:
                         )
                         state.pop("profile_survey_step", None)
                         state.pop("profile_survey_data", None)
+                        state.pop("profile_survey_cities", None)
                         continue
                     link_code = parse_link_code_command(raw_text)
                     if link_code:
