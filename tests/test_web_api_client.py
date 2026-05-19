@@ -368,6 +368,17 @@ def test_get_client_payment_request_builds_authorized_request():
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/payment-requests/101"
+
+
+def test_update_client_profile_uses_patch_profile_endpoint():
+    session = FakeSession(response=FakeResponse(payload={"ok": True}))
+    client = WebApiClient("https://bloomclub.ru", session=session)
+
+    assert client.update_client_profile("client-token", "Анна", "+7 999 123-45-67", "anna@mail.ru", "Новосибирск") == {"ok": True}
+    call = session.calls[0]
+    assert call["method"] == "PATCH"
+    assert call["url"] == "https://bloomclub.ru/api/v1/clients/me/profile"
+    assert call["json"] == {"full_name": "Анна", "phone": "+7 999 123-45-67", "email": "anna@mail.ru", "city": "Новосибирск"}
     assert call["headers"]["Authorization"] == "Bearer client-token"
 
 

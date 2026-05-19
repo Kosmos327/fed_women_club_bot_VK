@@ -85,6 +85,22 @@ VK_LINK_WEB_UNAVAILABLE_TEXT = "WEB-кабинет временно недост
 JOIN_CLUB_SERVICE_AUTH_ERROR_TEXT = "Сервисная авторизация бота не настроена. Обратитесь к администратору."
 JOIN_CLUB_WEB_UNAVAILABLE_TEXT = "WEB-сервис временно недоступен. Попробуйте позже."
 JOIN_CLUB_GENERIC_ERROR_TEXT = "Не удалось создать личный кабинет. Попробуйте позже или обратитесь в поддержку."
+PROFILE_SURVEY_INTRO_TEXT = (
+    "Чтобы мы могли связаться с вами в случае победы в ежемесячном розыгрыше, заполните короткую анкету.\n\n"
+    "1/4 Напишите ваше имя:"
+)
+PROFILE_SURVEY_NEEDS_CONTACTS_TEXT = "Для участия в розыгрышах осталось заполнить контактные данные."
+PROFILE_SURVEY_NAME_INVALID_TEXT = "Напишите имя текстом, например: Анна"
+PROFILE_SURVEY_PHONE_INVALID_TEXT = "Проверьте телефон. Например: +7 999 123-45-67"
+PROFILE_SURVEY_EMAIL_INVALID_TEXT = "Проверьте Email. Например: anna@mail.ru"
+PROFILE_SURVEY_PHONE_PROMPT_TEXT = "2/4 Напишите ваш телефон:"
+PROFILE_SURVEY_EMAIL_PROMPT_TEXT = "3/4 Напишите ваш Email:"
+PROFILE_SURVEY_CITY_PROMPT_TEXT = "4/4 Выберите или напишите ваш город:"
+PROFILE_SURVEY_CITY_OTHER_PROMPT_TEXT = "Напишите ваш город текстом:"
+PROFILE_SURVEY_SKIP_TEXT = "Хорошо, вы сможете заполнить данные позже в WEB-кабинете."
+PROFILE_SURVEY_CITY_SKIPPED_HINT_TEXT = "Хорошо, город можно заполнить позже в WEB-кабинете."
+PROFILE_SURVEY_DONE_TEXT = "Спасибо! Данные сохранены.\n\nТеперь вы сможете участвовать в ежемесячных розыгрышах клуба."
+PROFILE_SURVEY_SAVE_FAILED_TEXT = "Не удалось сохранить данные сейчас. Вы сможете заполнить их позже в WEB-кабинете."
 
 PARTNERS_WEB_LINK_REQUIRED_TEXT = (
     "Чтобы показать партнёров и скидки из WEB-кабинета, откройте WEB-кабинет и привяжите VK. "
