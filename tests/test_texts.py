@@ -303,6 +303,8 @@ def test_join_success_new_user_text_contains_login_temporary_password_and_open_b
     assert message == (
         "💗 WEB-кабинет создан\n"
         "\n"
+        "VK уже привязан к вашему WEB-кабинету.\n"
+        "\n"
         "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.\n"
         "\n"
         "Ваши данные для входа:\n"
@@ -313,6 +315,7 @@ def test_join_success_new_user_text_contains_login_temporary_password_and_open_b
         "\n"
         "Подписка пока не активна до оплаты, поэтому подтверждение привилегий будет доступно после оплаты."
     )
+    assert "Привязать КОД" not in message
     assert login in message
     assert temporary_password in message
     assert "password_hash" not in message
@@ -348,12 +351,15 @@ def test_join_success_existing_user_text_contains_login_and_setup_button():
     assert message == (
         "💗 WEB-кабинет уже создан\n"
         "\n"
+        "VK уже привязан к вашему WEB-кабинету.\n"
+        "\n"
         "Вы можете войти на bloomclub.ru.\n"
         "\n"
         f"Логин: {login}\n"
         "\n"
         "Пароль уже был установлен ранее. Если вы его не помните, установите новый пароль по кнопке ниже."
     )
+    assert "Привязать КОД" not in message
     assert login in message
     assert "temporary_password" not in message
     assert "password_hash" not in message
@@ -614,6 +620,17 @@ def test_join_web_unavailable_maps_to_unavailable_ux():
     message = main.handle_join_club(JoinErrorClient(WebApiError("web_unavailable")), 3004, "bot-token")
 
     assert "WEB-сервис временно недоступен" in message
+
+
+def test_join_missing_onboarding_token_returns_clear_error_and_does_not_crash():
+    reset_user_state(3017)
+    client = JoinSuccessClient(payload={"is_new": True, "login": "user@example.com", "temporary_password": "tmp-pass"})
+
+    message, keyboard = main.handle_join_club_result(client, 3017, "bot-token")
+
+    assert "не удалось открыть сессию" in message.lower()
+    assert keyboard == keyboards.get_main_keyboard()
+    assert get_web_client_token(3017) is None
 
 
 def test_join_city_404_retries_without_city_slug():

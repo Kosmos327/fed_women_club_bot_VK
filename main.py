@@ -67,6 +67,7 @@ from texts import (
     FALLBACK_TEXT,
     HELP_TEXT,
     JOIN_CLUB_GENERIC_ERROR_TEXT,
+    JOIN_CLUB_SESSION_MISSING_TEXT,
     JOIN_CLUB_SERVICE_AUTH_ERROR_TEXT,
     JOIN_CLUB_WEB_UNAVAILABLE_TEXT,
     MAIN_MENU_TEXT,
@@ -1715,6 +1716,8 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
         lines = [
             "💗 WEB-кабинет создан",
             "",
+            "VK уже привязан к вашему WEB-кабинету.",
+            "",
             "Вы уже можете открыть bloomclub.ru и посмотреть каталог партнёров.",
             "",
             "Ваши данные для входа:",
@@ -1732,6 +1735,8 @@ def build_join_club_success_text(response: dict, city_retry_without_slug: bool =
     else:
         lines = [
             "💗 WEB-кабинет уже создан",
+            "",
+            "VK уже привязан к вашему WEB-кабинету.",
             "",
             "Вы можете войти на bloomclub.ru.",
             "",
@@ -1808,7 +1813,11 @@ def handle_join_club_result(web_client: WebApiClient, vk_user_id: int | str, bot
         return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
     token, user = extract_web_session_from_onboard_response(payload)
     if not token:
-        return JOIN_CLUB_WEB_UNAVAILABLE_TEXT, get_main_keyboard()
+        logger.info(
+            "vk_onboard_missing_session",
+            extra={"vk_user_id": vk_user_id, "action": "vk_onboard", "result": "error", "error_code": "missing_token"},
+        )
+        return JOIN_CLUB_SESSION_MISSING_TEXT, get_main_keyboard()
     set_web_client_session(vk_user_id, token, user, linked_at=datetime.now(timezone.utc).isoformat())
     keyboard = get_web_onboarding_keyboard(
         password_setup_url=extract_password_setup_url(payload) if should_show_password_setup_button(payload) else None,
